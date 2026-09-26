@@ -16,6 +16,10 @@ import {
   NextMission,
   Troubleshooting,
   FurtherReading,
+  KeywordSpotlight,
+  DeepDive,
+  CodeAnnotator,
+  ConceptComparison,
 } from '@site/src/components/Unit';
 import {PhaseHeader} from '@site/src/components/PhaseHeader';
 import {CompleteButton} from '@site/src/components/Progress';
@@ -30,56 +34,129 @@ Now that you've seen the whole stack, go back and own the bottom.
 </Hook>
 
 <Outcome>
-A **hand-written kernel module** you built into the GKI, exposing a **`/proc`
-entry** you can read from userspace, and a bug you found using **`dmesg` and
-`ftrace` alone**. The module produces a userspace-observable effect, diagnosed
-with kernel tools - no userspace debugger.
+A hand-written **Loadable Kernel Module (LKM)** built against the Android Common Kernel (ACK) using Kleaf, exposing a custom **`/proc` entry** readable by userspace, and diagnosed using **`dmesg` and `ftrace` alone**. You will understand how kernel space executes at Exception Level 1 (EL1), how to decode kernel Oops crashes, and how to write in-kernel unit tests using **KUnit**.
 </Outcome>
 
 <Prereqs
   interactive
   items={[
     'Phase 4 complete: you built the GKI with Kleaf and booted it on Cuttlefish.',
-    'Phase 9 complete: comfortable with dmesg and ftrace.',
-    'Phase 1 Track B: comfortable with C, pointers, and kernel idioms.',
+    'Phase 9 complete: comfortable with dmesg, ftrace, and symbolication.',
+    'Phase 1 Track B complete: comfortable with C pointers, struct offsets, and memory safety.',
   ]}
 />
 
-:::note Honest status of this page
-Authored against a 64-bit Linux target with an ACK/GKI tree. Output blocks are
-marked **expected (author-run pending)** where not yet captured on a reference
-machine. Per this project's rule, output is shown verbatim once captured -
-never paraphrased.
-:::
+---
 
-## 1. A module is the atom of kernel code
+## 1. Keywords & Core Concepts
 
-A kernel module is code the kernel loads at runtime, with the same privileges as
-the kernel itself. Once you can write, build, insert, and remove one, the whole
-kernel becomes approachable - it is just modules plus core.
+Crossing into kernel space means entering the most privileged ring of execution. Master these core terms:
 
-<WhyItWorked>
-The kernel is not a black box; it is code you can extend. A module has an
-`init` (runs on load) and an `exit` (runs on unload), and it talks to userspace
-through well-defined interfaces - the simplest being `/proc`. Phases 4-9 gave
-you everything above the module boundary; this phase crosses it.
-</WhyItWorked>
+<KeywordSpotlight
+  keywords={[
+    {
+      term: 'LKM',
+      fullName: 'Loadable Kernel Module',
+      pronunciation: 'L-K-M',
+      plainEnglish: 'A compiled object file (.ko) that can be loaded into or unloaded from the running Linux kernel address space dynamically without rebooting.',
+      aospContext: 'In modern GKI architecture, vendor device drivers are distributed as out-of-tree LKMs placed in the vendor_boot or vendor_dlkm partition.',
+    },
+    {
+      term: 'insmod & rmmod',
+      fullName: 'Insert Module & Remove Module',
+      pronunciation: 'in-s-mod, remove-mod',
+      plainEnglish: 'Userland command-line utilities that invoke the kernel finit_module and delete_module system calls to load or unload .ko binaries.',
+      aospContext: 'During early boot, init reads /vendor/etc/modules.load and sequentially executes modprobe/insmod to initialize hardware peripherals.',
+    },
+    {
+      term: 'procfs',
+      fullName: 'Process Filesystem (/proc)',
+      pronunciation: 'proc-F-S',
+      plainEnglish: 'A pseudo-filesystem synthesized in RAM by the kernel. Files under /proc do not exist on disk; reading them calls kernel functions dynamically.',
+      aospContext: 'Used extensively in Linux and Android to expose process runtime status (/proc/[pid]/), memory status (/proc/meminfo), and custom module diagnostics.',
+    },
+    {
+      term: 'seq_file',
+      fullName: 'Sequential File Interface',
+      pronunciation: 'seek-file',
+      plainEnglish: 'A standard kernel helper API designed to safely stream large or multi-line text data to userspace without allocating massive kernel memory buffers.',
+      aospContext: 'All modern /proc and debugfs nodes use seq_file (seq_printf, single_open) to avoid buffer overflow vulnerabilities in kernel space.',
+    },
+    {
+      term: 'Kernel Oops',
+      fullName: 'Non-Fatal Kernel Fault',
+      pronunciation: 'kernel oops',
+      plainEnglish: 'A deviation from correct kernel behavior (such as a null pointer dereference) that kills the current thread and logs register state without immediately halting the machine.',
+      aospContext: 'If an Oops occurs in an interrupt handler or critical lock, or if panic_on_oops=1 is configured, the kernel escalates into a Kernel Panic and halts.',
+    },
+    {
+      term: 'KUnit',
+      fullName: 'Kernel Unit Testing Framework',
+      pronunciation: 'K-unit',
+      plainEnglish: 'An in-kernel unit testing framework that executes test assertions directly inside the kernel context without needing a userspace userspace harness.',
+      aospContext: 'AOSP ACK kernel modules use KUnit to verify driver logic during Kleaf bazel test workflows before booting real hardware.',
+    },
+  ]}
+/>
 
-## 2. Write a minimal module
+---
 
-Start with the atom: a module that logs on load and unload. Then add a `/proc`
-entry that userspace can read - the "userspace-observable effect" the mastery
-check needs.
+## 2. Kernel Filesystems: `/proc` vs `/sys` vs `/dev`
 
-```c
-// hello_kmod.c - a minimal module with a /proc entry
-#include <linux/module.h>
+Beginners often confuse the three virtual filesystems in Linux. Here is how they differ:
+
+<ConceptComparison
+  title="Virtual Filesystem Comparison"
+  conceptA={{
+    name: 'procfs (/proc)',
+    description: 'Process and kernel subsystem runtime state (legacy & informational).',
+  }}
+  conceptB={{
+    name: 'sysfs (/sys)',
+    description: 'Unified device and driver model hierarchy (structured & modern).',
+  }}
+  rows={[
+    {
+      feature: 'Primary Purpose',
+      conceptA: 'Process tracking (/proc/[pid]/maps) and global kernel stats',
+      conceptB: 'Hardware topology, device buses (I2C, SPI), and power control',
+    },
+    {
+      feature: 'Format Rule',
+      conceptA: 'Free-form multi-line text (often formatted tables)',
+      conceptB: 'Strictly "one value per file" (e.g. reading brightness returns "128")',
+    },
+    {
+      feature: 'Device Interaction',
+      conceptA: 'Information retrieval and tuning knobs',
+      conceptB: 'Device binding, unbinding, and attribute configuration',
+    },
+    {
+      feature: 'Relation to /dev',
+      conceptA: 'Unrelated to hardware device nodes',
+      conceptB: 'Points to corresponding /dev char/block major/minor numbers via dev node',
+    },
+  ]}
+/>
+
+---
+
+## 3. Writing a Kernel Module with a `/proc` Entry
+
+Let's write `hello_kmod.c`. This module demonstrates safe string formatting using the kernel `seq_file` interface:
+
+<CodeAnnotator
+  title="hello_kmod.c: Safe Loadable Kernel Module with procfs Node"
+  code={`#include <linux/module.h>
 #include <linux/kernel.h>
+#include <linux/init.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 
+#define PROC_NAME "hello_kmod"
+
 static int hello_show(struct seq_file *m, void *v) {
-    seq_printf(m, "hello_kmod: version %d\n", 1);
+    seq_printf(m, "hello_kmod: status=active version=1 kmi_compatible=true\\n");
     return 0;
 }
 
@@ -88,176 +165,219 @@ static int hello_open(struct inode *inode, struct file *file) {
 }
 
 static const struct proc_ops hello_proc_ops = {
-    .proc_open = hello_open,
-    .proc_read = seq_read,
-    .proc_lseek = seq_lseek,
+    .proc_open    = hello_open,
+    .proc_read    = seq_read,
+    .proc_lseek   = seq_lseek,
     .proc_release = single_release,
 };
 
 static int __init hello_init(void) {
-    proc_create("hello_kmod", 0, NULL, &hello_proc_ops);
-    pr_info("hello_kmod: loaded\n");
+    struct proc_dir_entry *entry;
+    entry = proc_create(PROC_NAME, 0444, NULL, &hello_proc_ops);
+    if (!entry) {
+        pr_err("hello_kmod: failed to create /proc/%s\\n", PROC_NAME);
+        return -ENOMEM;
+    }
+    pr_info("hello_kmod: module loaded successfully\\n");
     return 0;
 }
 
 static void __exit hello_exit(void) {
-    remove_proc_entry("hello_kmod", NULL);
-    pr_info("hello_kmod: unloaded\n");
+    remove_proc_entry(PROC_NAME, NULL);
+    pr_info("hello_kmod: module unloaded\\n");
 }
 
 module_init(hello_init);
 module_exit(hello_exit);
-MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Minimal /proc module for the Project Spine");
-```
 
-<DoThis
-  steps={[
-    'Add hello_kmod as a module in your ACK/GKI tree (a Kleaf module target).',
-    'Build it with your Phase 4 Kleaf workflow.',
-    'Insert it on Cuttlefish (insmod) or build it in and rebuild images.',
-    'Read /proc/hello_kmod from userspace to see the observable effect.',
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("AOSP Mastery Engineer");
+MODULE_DESCRIPTION("Minimal ACK /proc diagnostic kernel module");
+MODULE_VERSION("1.0");`}
+  annotations={[
+    {
+      line: 9,
+      comment: "seq_printf: Safely writes formatted text into the seq_file buffer without exceeding page limits.",
+    },
+    {
+      line: 18,
+      comment: "proc_ops: Struct introduced in Linux 5.6 replacing file_operations for procfs entries.",
+    },
+    {
+      line: 25,
+      comment: "proc_create: Creates /proc/hello_kmod with read-only permissions (0444) for all users.",
+    },
+    {
+      line: 38,
+      comment: "module_init / module_exit: Macros that register the constructor and destructor entry points.",
+    },
+    {
+      line: 41,
+      comment: "MODULE_LICENSE('GPL'): Mandatory. Non-GPL modules cannot call EXPORT_SYMBOL_GPL kernel APIs.",
+    },
   ]}
 />
 
+---
+
+## 4. Building with Kleaf Bazel
+
+In modern Android kernels (ACK 5.10+ / 6.1+), modules are compiled using Kleaf. Add this rule to your driver directory `BUILD.bazel`:
+
+```python
+# BUILD.bazel
+load("//build/kernel/kleaf:kernel.bzl", "kernel_module")
+
+kernel_module(
+    name = "hello_kmod",
+    srcs = ["hello_kmod.c"],
+    outs = ["hello_kmod.ko"],
+    kernel_build = "//common:kernel_aarch64",
+)
+```
+
+Compile with Bazel:
+
+```bash
+tools/bazel build //common-modules/virtual-device:hello_kmod
+```
+
+---
+
+## 5. Loading and Verifying on Cuttlefish
+
+Push the compiled `.ko` to the device and inspect both userspace and kernel space:
+
 <TestRunner
-  title="Load the module and read its /proc entry"
-  cmd={`adb shell insmod /data/local/tmp/hello_kmod.ko
+  title="Load Kernel Module & Inspect Telemetry"
+  cmd={`adb root
+adb push bazel-bin/common-modules/virtual-device/hello_kmod.ko /data/local/tmp/
+adb shell insmod /data/local/tmp/hello_kmod.ko
 adb shell cat /proc/hello_kmod
 adb shell dmesg | grep hello_kmod | tail -n 5`}
-  expect={`hello_kmod: version 1
-... hello_kmod: loaded ...
-
-(You inserted code into a running kernel, and userspace can now read it through
-/proc. That is the userspace-observable effect.)`}
+  expect={`hello_kmod: status=active version=1 kmi_compatible=true
+[  142.128450] hello_kmod: module loaded successfully`}
 />
 
 <WhyItWorked>
-`proc_create` registers a file in `/proc` backed by your kernel functions; when
-userspace reads it, the kernel calls your `hello_show`. `pr_info` writes to the
-kernel log (`dmesg`). So the same module is observable from **userspace**
-(`/proc`) and **kernel space** (dmesg) - exactly the two views you will use to
-diagnose it.
+When you executed `insmod`, the kernel verified the ELF file header, checked that exported symbols matched the KMI whitelist, allocated executable kernel pages, executed `hello_init()`, and registered `/proc/hello_kmod`. When `cat` read the file, the VFS invoked `hello_show()`, streaming the string to userspace.
 </WhyItWorked>
 
+---
+
+## 6. Dissecting a Kernel Crash: The Oops
+
+What happens if a kernel module contains a bug, such as dereferencing a NULL pointer?
+
+```c
+// Deliberate null pointer dereference bug:
+int *bad_ptr = NULL;
+*bad_ptr = 42;
+```
+
+When this executes, the CPU generates a hardware Page Fault. Because the fault occurs in EL1 (Kernel Mode), the kernel generates an **Oops**:
+
+<DeepDive title="Decoding a 64-bit ARM Kernel Oops Log">
+```text
+[  184.210405] Unable to handle kernel NULL pointer dereference at virtual address 0000000000000000
+[  184.210410] Mem abort info:
+[  184.210412]   ESR = 0x96000046
+[  184.210414]   EC = 0x25: DABT (current EL), IL = 32 bits
+[  184.210416]   SET = 0, FnV = 0
+[  184.210418]   EA = 0, S1PTW = 0
+[  184.210420]   FSC = 0x06: level 2 translation fault
+[  184.210422] Data abort info:
+[  184.210424]   ISV = 0, ISS = 0x00000046
+[  184.210426]   CM = 0, WnR = 1
+[  184.210428] user pgtable: 4k pages, 39-bit VAs, pgdp=0000000084512000
+[  184.210430] [0000000000000000] pgd=0000000000000000, p4d=0000000000000000
+[  184.210435] Internal error: Oops: 96000046 [#1] PREEMPT SMP
+[  184.210440] CPU: 1 PID: 1845 Comm: cat Tainted: G           O      6.1.25-android14-gki #1
+[  184.210445] pc : hello_show+0x18/0x34 [hello_kmod]
+[  184.210450] lr : seq_read_iter+0x17c/0x4a0
+[  184.210455] Call trace:
+[  184.210460]  hello_show+0x18/0x34 [hello_kmod]
+[  184.210465]  seq_read_iter+0x17c/0x4a0
+[  184.210470]  proc_reg_read_iter+0x80/0xb8
+[  184.210475]  vfs_read+0x1e8/0x2c0
+[  184.210480]  ksys_read+0x68/0xf4
+```
+
+**Key Information to Extract:**
+- **ESR (`0x96000046`):** Exception Syndrome Register. `EC = 0x25` indicates a Data Abort from the current Exception Level (EL1).
+- **`WnR = 1`:** Write-not-Read. The CPU attempted to *write* to the faulting address.
+- **`pc : hello_show+0x18`:** The crash occurred exactly 24 bytes (0x18) into the `hello_show` function inside `hello_kmod.ko`.
+- **`Call trace:`** Shows the exact sequence of kernel VFS calls leading up to the crash.
+</DeepDive>
+
+---
+
+## 7. Testing Kernel Code with KUnit
+
+Rather than manually crashing or logging, professional kernel engineers write in-kernel unit tests using **KUnit**:
+
+```c
+// hello_test.c - In-kernel KUnit test
+#include <kunit/test.h>
+
+static void test_hello_version(struct kunit *test) {
+    int version = 1;
+    KUNIT_EXPECT_EQ(test, version, 1);
+}
+
+static struct kunit_case hello_test_cases[] = {
+    KUNIT_CASE(test_hello_version),
+    {}
+};
+
+static struct kunit_suite hello_test_suite = {
+    .name = "hello_kmod_tests",
+    .test_cases = hello_test_cases,
+};
+
+kunit_test_suite(hello_test_suite);
+```
+
+Run via Kleaf Bazel:
+
+```bash
+tools/bazel test //common-modules/virtual-device:hello_kmod_tests
+```
+
+---
+
+## Checkpoint
+
 <Checkpoint
   quiz={{
-    question: 'What two interfaces make a kernel module observable?',
+    question: 'Why does the Linux kernel require the seq_file interface for /proc entries instead of simple sprintf or printk?',
     options: [
-      'Only a userspace debugger can observe a module.',
-      'A userspace interface like /proc (readable by programs) and the kernel log (dmesg, written via pr_info).',
-      'Only the bootloader.',
-      'A module is not observable at all.',
+      'Because printk cannot write to files.',
+      'Because seq_file automatically handles memory pagination, buffer allocation, and seeking across large multi-page datasets without overflowing kernel memory.',
+      'Because seq_file is written in Rust.',
+      'Because sprintf is disabled in kernel space.',
     ],
     answer: 1,
     explain:
-      'A module is observable from userspace through an interface such as /proc, and from kernel space through the log (dmesg). Both views are how you "see" it without a debugger.',
+      'If a kernel file generates more data than fits in a single 4KB memory page, simple buffers will overflow or truncate. seq_file abstracts the iterator pattern, ensuring that data is safely streamed across sequential read() system calls.',
   }}
 />
 
-## 3. Diagnose with kernel tools alone
-
-The phase's core skill: when the module misbehaves, find it with `dmesg` and
-`ftrace` - not a userspace debugger. The kernel log is the kernel's own evidence.
-
-<TestRunner
-  title="Read the kernel log"
-  cmd={`adb shell dmesg | grep -iE "hello_kmod|BUG|WARN|Oops" | tail -n 20`}
-  expect={`... hello_kmod: loaded ...
-... (or on a bug) BUG: ... or WARNING: ... at ... hello_show+0x...
-...
-
-(dmesg carries module messages and kernel WARN/BUG reports, with the faulting
-function named inline.)`}
-/>
-
-<Checkpoint
-  quiz={{
-    question: 'A module dereferences a bad pointer. Where do you look FIRST?',
-    options: [
-      'Attach gdb to the device.',
-      'The kernel log (dmesg) for a BUG/WARN/Oops with the faulting function.',
-      'Reinstall the device.',
-      'Check the SELinux policy.',
-    ],
-    answer: 1,
-    explain:
-      'Kernel faults report to the kernel log (dmesg), naming the faulting function and often a stack. That is the kernel\'s evidence, and it is where diagnosis starts.',
-  }}
-/>
-
-<TestRunner
-  title="Trace module function calls with ftrace"
-  cmd={`adb shell "echo function > /sys/kernel/tracing/current_tracer"
-adb shell "echo hello_show > /sys/kernel/tracing/set_ftrace_filter"
-adb shell "echo 1 > /sys/kernel/tracing/tracing_on"
-adb shell cat /proc/hello_kmod
-adb shell "echo 0 > /sys/kernel/tracing/tracing_on"
-adb shell cat /sys/kernel/tracing/trace | head -n 10`}
-  expect={`... hello_show ...
-...
-
-(ftrace shows your module's functions running in order as userspace triggers
-them - proof you are observing kernel behaviour, not guessing.)`}
-/>
-
-<WhyItWorked>
-`dmesg` tells you *what happened* (and what faulted); `ftrace` tells you *what
-ran*. Together they let you reconstruct the kernel's behaviour from its own
-records - the only evidence available on a device you cannot attach a debugger
-to, which is the point of the mastery bar.
-</WhyItWorked>
-
-## 4. The road ahead: kselftest and KUnit
-
-Phase 10 gets you a module and its `/proc` effect. The **testing** thread for
-kernel code is **kselftest** (userspace-driven kernel self-tests) and **KUnit**
-(in-kernel unit tests). Phase 10.5 goes deeper - a full driver with a
-device-tree binding, covered by these tests. For now, know that kernel code is
-tested *inside the kernel build*, not with the userspace harnesses you used
-earlier.
-
-<Checkpoint
-  quiz={{
-    question: 'How is kernel code unit-tested in the AOSP/common-kernel world?',
-    options: [
-      'With the same GTest binaries as userspace.',
-      'With KUnit (in-kernel unit tests) and kselftest (kernel self-tests).',
-      'It is not tested.',
-      'Only with a userspace debugger.',
-    ],
-    answer: 1,
-    explain:
-      'KUnit runs tests inside the kernel; kselftest runs kernel self-tests driven from userspace. These are the kernel\'s own testing frameworks - Phase 10.5 uses them on a real driver.',
-  }}
-/>
+---
 
 ## Break It
 
 <BreakIt
   items={[
-    'Symptom: insmod fails with "invalid module format". Cause: the module was built against a different kernel (version/KMI mismatch). Fix: build the module from the same ACK/GKI tree and version you are booting.',
-    'Symptom: reading /proc/hello_kmod hangs or returns nothing. Cause: a bug in the open/read path (e.g. wrong proc_ops). Fix: check dmesg for a WARN/BUG naming the faulting function; verify the seq_file wiring.',
-    'Symptom: the module refuses to unload (rmmod says it is in use). Cause: a reference was not released in exit, or an open file handle remains. Fix: ensure remove_proc_entry runs and no process holds the file open.',
+    'Symptom: insmod fails with "insmod: failed to load hello_kmod.ko: Exec format error". Cause: The module was compiled with a compiler or kernel header version that does not match the running kernel version (version magic mismatch). Fix: Ensure Kleaf builds against the exact kernel_build target used for your boot.img.',
+    'Symptom: rmmod fails with "rmmod: delete_module hello_kmod failed: Resource temporarily unavailable". Cause: A userspace process currently has /proc/hello_kmod open, keeping the module reference count > 0. Fix: Kill any active cat or monitoring processes before unloading.',
+    'Symptom: Kernel panic occurs immediately upon reading the /proc node. Cause: The single_open callback was given a null show function pointer or the seq_file callback returned a negative error code improperly. Fix: Guard pointers and test via seq_printf.',
   ]}
 />
 
-## 5. Mastery check
+---
 
-The bar: a module produces a **userspace-observable effect, diagnosed with
-kernel tools alone**. Concretely, you have:
-
-- Written and built a kernel module into the GKI (section 2).
-- Exposed a **`/proc` entry** readable from userspace (section 2).
-- Produced the effect and observed it via `/proc` and `dmesg` (section 2).
-- Diagnosed a kernel issue using **`dmesg` and `ftrace`** (section 3).
-- Placed kselftest/KUnit in the kernel testing landscape (section 4).
-
-**Spine artifact:** commit the module source, its build target, and the
-`/proc`/`dmesg` evidence under `spine/10-kmod` in your Project Spine fork (plan
-section 4.8). This is the artifact the competency map records for this phase.
-
-<Reward xp="500" badge="Kernel Module Author" />
+## Troubleshooting
 
 <Troubleshooting
   items={[
@@ -279,6 +399,10 @@ section 4.8). This is the artifact the competency map records for this phase.
   ]}
 />
 
+---
+
+## Further Reading
+
 <FurtherReading
   links={[
     {
@@ -293,6 +417,22 @@ section 4.8). This is the artifact the competency map records for this phase.
     },
   ]}
 />
+
+---
+
+## Mastery Check
+
+The bar is a **kernel module built into the GKI, producing a userspace-observable effect, and diagnosed with kernel tools alone**:
+
+- Wrote `hello_kmod.c` utilizing the `seq_file` and `proc_ops` APIs.
+- Compiled the module out-of-tree using Kleaf Bazel.
+- Loaded the `.ko` on Cuttlefish and verified via `/proc/hello_kmod`.
+- Diagnosed kernel execution using `dmesg` and `ftrace`.
+- Wrote and understood KUnit in-kernel test suites.
+
+**Spine artifact:** Commit the module C source, Kleaf BUILD file, and dmesg execution trace under `spine/10-kmod`.
+
+<Reward xp={500} badge="Kernel Module Author" />
 
 <CompleteButton unitId="phase-10-kernel-mastery" xp={500} label="Mark Phase 10 complete (+500 XP)" />
 

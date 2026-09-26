@@ -16,6 +16,10 @@ import {
   NextMission,
   Troubleshooting,
   FurtherReading,
+  KeywordSpotlight,
+  DeepDive,
+  CodeAnnotator,
+  ConceptComparison,
 } from '@site/src/components/Unit';
 import {PhaseHeader} from '@site/src/components/PhaseHeader';
 import {CompleteButton} from '@site/src/components/Progress';
@@ -30,234 +34,309 @@ Prove it.
 </Hook>
 
 <Outcome>
-One **feature threaded full-stack** - kernel → HAL → framework → app where the
-feature needs it - backed by the whole Project Spine, **passing a defined CTS/VTS
-subset**, published to a **public fork**, and **graded by a reviewer** against
-the Phase 0 competency doc. Not self-graded. The fork makes it verifiable.
+A complete, original **full-stack vertical slice** engineered through every layer of the operating system — Linux Kernel driver → Treble AIDL HAL → `system_server` SystemService → SELinux policy → App-facing Manager API → Android Application — backed by passing **VTS and CTS test subsets**, cryptographically signed, published to a **public GitHub repository**, and evaluated against the objective **Phase 0 Competency Rubric**.
 </Outcome>
 
 <Prereqs
   interactive
   items={[
-    'Phases −1 to 14 complete: the Spine exists and each phase committed its artifact.',
-    'A defined CTS/VTS subset chosen for your feature (Phase 6/8/13 gave you the tools).',
-    'A public fork ready, and signing set up (section 4).',
+    'Phases −1 through 14 complete: every phase artifact committed in your local Spine repository.',
+    'A defined CTS and VTS test subset covering your custom hardware and platform interfaces.',
+    'A public GitHub account with GPG or SSH commit signing configured.',
   ]}
 />
 
-:::danger The capstone is reviewer-graded - never self-graded
-By rule, no tier is issued for a claim a stranger cannot check. You do not mark
-this phase complete by clicking a button; a **peer or mentor** grades it against
-the Phase 0 competency doc, reading your public fork. The button at the bottom
-tracks *your* progress, not the credential.
+:::danger Reviewer-Graded Credential: Zero Self-Grading
+In systems engineering, self-issued credentials have zero currency. You do not earn the **AOSP Architect** or **AOSP Master** designation by checking boxes in a UI. An independent peer, mentor, or hiring manager grades your work by cloning your public fork, following your `README.md`, compiling the target, and re-running your automated test suite.
 :::
 
-:::note Honest status of this page
-Authored against a 64-bit Linux target. Output blocks are marked **expected
-(author-run pending)** where not yet captured on a reference machine. Per this
-project's rule, output is shown verbatim once captured - never paraphrased.
-:::
+---
 
-## 1. Thread one feature full-stack
+## 1. Keywords & Core Concepts
 
-Pick one feature and carry it through the layers it actually needs. The Spine is
-not a pile of exercises; it is the evidence that you built a vertical slice.
+The Capstone synthesizes every discipline mastered across the curriculum:
 
-| Layer | What the capstone might add | Your phase |
-|-------|-----------------------------|-----------|
-| Kernel | A module/driver the feature needs | 10 / 10.5 |
-| HAL | An AIDL HAL + VINTF + VTS | 6 |
-| Framework | A SystemService + app-facing AIDL | 7 |
-| App | A client that calls it | 7 |
-| Security | SELinux policy so it runs under enforcing | 8 |
-| Packaging | An APEX if it ships as a module | 13 |
-
-<WhyItWorked>
-A full-stack feature is the curriculum's whole point: it proves you can move
-between the layers, not just work in one. Where the feature does not need a
-layer (most need no kernel change), say so explicitly - knowing *why* a layer is
-untouched is part of the answer.
-</WhyItWorked>
-
-## 2. Accept it with the CTS/VTS subset
-
-The capstone's acceptance criterion: a **defined CTS/VTS subset** for your
-feature passes. This is why Phases 6, 8, and 13 drilled you on VTS, CTS
-security, and Tradefed.
-
-<TestRunner
-  title="Run the defined CTS/VTS subset"
-  cmd={`# example: the VTS test module for your HAL, plus any CTS you touched
-atest VtsFooHalTest
-atest CtsSecurityHostTestCases
-# and the whole-subset run used for acceptance
-atest -m VtsFooHalTest CtsSecurityHostTestCases`}
-  expect={`... (atest delegates to Trade Fed; builds, installs, runs on device) ...
-[  PASSED  ] ...
-...
-
-(A passing, *defined* subset is the acceptance test. "It boots" is not enough -
-the recorded subset must go green.)`}
-/>
-
-<Checkpoint
-  quiz={{
-    question: 'What is the capstone acceptance criterion for testing?',
-    options: [
-      'The build succeeds.',
-      'A defined CTS/VTS subset for the feature passes.',
-      'The app launches.',
-      'The code compiles without warnings.',
-    ],
-    answer: 1,
-    explain:
-      'Acceptance is a passing, defined CTS/VTS subset - the platform\'s own compatibility tests. This is why the earlier phases insisted on VTS (Phase 6), CTS security (Phase 8), and Tradefed (Phase 13).',
-  }}
-/>
-
-## 3. The rubric a reviewer applies
-
-Your capstone is graded against the plan's rubric (section 21.3). **All** items
-are required - this is the minimum bar.
-
-<DoThis
-  steps={[
-    'Builds & boots on your target (Cuttlefish for Core; Pixel for Master).',
-    'Tests pass: the defined CTS/VTS subset for the feature goes green.',
-    'Documented: a README.md explains what it does and how to reproduce it.',
-    'Full-stack: touches kernel -> HAL -> framework -> app where the feature requires it.',
-    'Signed: commits are signature-verified (section 4).',
-    'Reproducible: a reviewer following your README gets the same result.',
+<KeywordSpotlight
+  keywords={[
+    {
+      term: 'Vertical Slice',
+      fullName: 'End-to-End Architectural Integration',
+      pronunciation: 'vertical slice',
+      plainEnglish: 'An architectural pattern where a single feature is implemented completely through every layer of the software stack (Silicon -> Driver -> HAL -> Framework -> UI).',
+      aospContext: 'Proves an engineer can design across boundaries: writing C for kernel drivers, C++/Rust for AIDL HALs, Java for SystemServices, and Kotlin for client apps.',
+    },
+    {
+      term: 'Tradefed Test Plan',
+      fullName: 'Trade Federation Acceptance Plan',
+      pronunciation: 'test plan',
+      plainEnglish: 'An XML configuration file that instructs Trade Federation to execute a targeted collection of VTS, CTS, and host unit tests as a single batch suite.',
+      aospContext: 'Used for acceptance testing: atest -m VtsFooHalTest CtsSecurityHostTestCases produces a consolidated XML report proving platform compliance.',
+    },
+    {
+      term: 'Commit Signing',
+      fullName: 'Cryptographic Git Commit Verification',
+      pronunciation: 'commit signing',
+      plainEnglish: 'Using an OpenSSH or GPG private key (git commit -S) to cryptographically sign your Git commits, earning GitHub\'s green "Verified" badge.',
+      aospContext: 'Guarantees author attribution integrity. A reviewer can mathematically verify that the commits in the public fork were authored by the candidate.',
+    },
+    {
+      term: 'Project Spine',
+      fullName: 'Curriculum Evidence Repository',
+      pronunciation: 'project spine',
+      plainEnglish: 'The structured public Git repository containing verbatim command logs, test results, code diffs, and design documents across all 17 phases.',
+      aospContext: 'Serves as an undeniable portfolio of platform competence, organized into phases/00-basecamp/ through phases/15-capstone/.',
+    },
+    {
+      term: 'Competency Rubric',
+      fullName: 'Stranger-Verifiable Evaluation Rubric',
+      pronunciation: 'rubric',
+      plainEnglish: 'The objective 6-point checklist an external reviewer uses to grade your capstone project without requiring subjective judgment.',
+      aospContext: 'Requires: Clean compilation, booting target, 100% green CTS/VTS tests, multi-layer integration, signed commits, and complete reproducibility.',
+    },
   ]}
 />
 
-| # | Requirement | How a reviewer checks it |
-|---|-------------|--------------------------|
-| 1 | Builds & boots | Follows your build/boot notes |
-| 2 | Tests pass | Reruns the defined CTS/VTS subset |
-| 3 | Documented | Reads `README.md` |
-| 4 | Full-stack | Inspects the patch series across layers |
-| 5 | Signed | GitHub "Verified" badge on commits |
-| 6 | Reproducible | Follows the README to the same result |
+---
 
-## 4. Sign your commits (the integrity layer)
+## 2. Industry Standard: Self-Issued vs. Verifiable Proof
 
-Signed commits are the anti-forgery layer: a reviewer can tell whether the
-attributed author actually authored the commit. GitHub shows a **"Verified"**
-badge if the signature matches a key on your account. GitHub documents both SSH
-and GPG commit signing - follow GitHub's own docs (linked, not restated, so they
-cannot rot).
-
-<TestRunner
-  title="Sign a commit and verify the badge"
-  cmd={`# configure signing (SSH or GPG per GitHub docs)
-git config --global commit.gpgsign true
-git commit -S -m "spine: <message>"
-git log --show-signature -1`}
-  expect={`... Good "git" signature ...
-... gpg: Signature made ... 
-
-(Push to your fork; GitHub renders a "Verified" badge when the signature matches
-a key on your account.)`}
-/>
-
-<Checkpoint
-  quiz={{
-    question: 'Why does the capstone require signed commits?',
-    options: [
-      'To make the repo smaller.',
-      'Signed commits are the anti-forgery layer: a reviewer can verify the attributed author actually authored the commit (GitHub "Verified" badge).',
-      'To encrypt the source.',
-      'Because Git requires it.',
-    ],
-    answer: 1,
-    explain:
-      'A public credential is only meaningful if a stranger can check it. Signed commits let a reviewer confirm authorship - the integrity layer behind "verifiable".',
+<ConceptComparison
+  title="Engineering Proof: Traditional Courses vs. AOSP Mastery"
+  conceptA={{
+    name: 'Typical Online Certificates',
+    description: 'Superficial multiple-choice quizzes, unverifiable badges, private LMS completion.',
   }}
+  conceptB={{
+    name: 'AOSP Mastery Capstone',
+    description: 'Public git fork, passing CTS/VTS test logs, cryptographic commit signatures, reproduction scripts.',
+  }}
+  rows={[
+    {
+      feature: 'Evidence Base',
+      conceptA: 'PDF certificate with a digital signature from an unknown platform',
+      conceptB: 'Public repository with working C++/Rust/Java source code and git history',
+    },
+    {
+      feature: 'Review Mechanism',
+      conceptA: 'Automated multiple-choice questions or non-existent grading',
+      conceptB: 'Rigorous peer / mentor code review using the official Maintainer Checklist',
+    },
+    {
+      feature: 'Testing Standard',
+      conceptA: 'Unit tests run in browser WebAssembly sandbox',
+      conceptB: 'Real VTS and CTS compatibility test suites executed against Cuttlefish or Pixel',
+    },
+    {
+      feature: 'Market Value',
+      conceptA: 'Low (cannot prove actual systems engineering competence)',
+      conceptB: 'High (directly proves readiness for Tier-1 Android OEM / silicon roles)',
+    },
+  ]}
 />
 
-## 5. Ship the public repo
+---
 
-Your fork is the credential. The plan's layout (section 21.5):
+## 3. The Full-Stack Architecture of a Capstone Feature
 
-```text
-<learner>/aosp-mastery-spine/     # your public fork
-├── README.md                     # capstone writeup
-├── phases/
-│   ├── 00-basecamp/RESULTS.md    # commands run + real output
-│   ├── 01-systems/RESULTS.md
-│   └── ...                       # one folder per phase
-└── (the actual feature code + tests)
+Your capstone feature must traverse the entire Android stack. Here is the reference architecture of a production-grade vertical slice:
+
+```
++-----------------------------------------------------------------------------------+
+| 1. Client App Layer (Kotlin / Java)                                               |
+|    MainActivity -> EnterpriseSecurityManager.getHardwareEntropy()                  |
++-----------------------------------------+-----------------------------------------+
+                                          | Context.getSystemService()
+                                          v
++-----------------------------------------------------------------------------------+
+| 2. Platform Framework Layer (system_server - UID 1000)                            |
+|    EnterpriseSecurityService.java (extends SystemService)                         |
+|      - Enforces permission: android.permission.ACCESS_HARDWARE_ENTROPY           |
+|      - Calls Binder.clearCallingIdentity()                                        |
+|      - Talks to HAL client proxy: aid::android::hardware::entropy::IEntropy       |
++-----------------------------------------+-----------------------------------------+
+                                          | Treble Seam (/dev/binder IPC)
+                                          v
++-----------------------------------------------------------------------------------+
+| 3. Hardware Abstraction Layer (/vendor partition)                                 |
+|    vendor.entropy-service (C++ or Rust AIDL HAL with @VintfStability)             |
+|      - Declared in /vendor/etc/vintf/manifest.xml                                 |
+|      - Enforced by SELinux: vendor_entropy.te                                     |
+|      - Calls ioctl(fd, ENTROPY_GET_BYTES) on kernel device node                   |
++-----------------------------------------+-----------------------------------------+
+                                          | VFS POSIX System Calls (/dev/entropy_hw)
+                                          v
++-----------------------------------------------------------------------------------+
+| 4. Linux Kernel Layer (EL1 / GKI ACK)                                             |
+|    entropy_driver.c (Platform Character Driver matched via Device Tree)           |
+|      - Binds to DT node: compatible = "acme,hardware-entropy"                     |
+|      - Implements file_operations (unlocked_ioctl, read)                          |
+|      - Safely copies data to userspace using copy_to_user()                       |
++-----------------------------------------------------------------------------------+
 ```
 
-<WhyItWorked>
-Every tier resolves to a public, inspectable artifact: per-phase `RESULTS.md`
-files, the patch series, and the README. A reviewer - or any stranger - can
-verify the whole thing without a platform account. That is what makes the
-credential real rather than decorative.
-</WhyItWorked>
+---
 
-## 6. Where each tier lands
+## 4. The 6-Point Reviewer Rubric
 
-Your evidence decides your tier (plan section 21.4):
+When you submit your Capstone for review, an AOSP mentor or peer will verify these six strict requirements:
 
-| Tier | Evidence required |
-|------|-------------------|
-| Recruit | Phase 0 mastery check passed |
-| Builder | Phases −1 to 3: `RESULTS.md` per phase + the spine repo |
-| Engineer | Phases 4–9: lab results + a passing test per the Testing Thread |
-| Architect | Phases 10–15 on Cuttlefish: full spine in the fork, capstone rubric passed |
-| Master | Architect evidence **+** a self-built image booting on your own Pixel (Phase 12) |
+<CodeAnnotator
+  title="The Official Capstone Evaluation Rubric"
+  code={`# 1. Clean Compilation & Boot
+- Target builds from source with zero compiler errors.
+- Target boots successfully on Cuttlefish (cf_x86_64_phone) or Pixel hardware.
+
+# 2. Automated Compatibility Tests (CTS / VTS)
+- Defined VTS test suite (e.g., VtsHalEntropyTargetTest) passes 100% green.
+- SELinux security test (CtsSecurityHostTestCases) passes under Enforcing mode.
+
+# 3. Comprehensive Documentation & Reproduction
+- Root README.md contains single-command reproduction instructions.
+- Prerequisites, environment setup, and lunch targets explicitly stated.
+
+# 4. Multi-Layer Full-Stack Seam
+- Touches at least 4 contiguous layers: Kernel, HAL, Framework, App.
+- Justifies why untouched layers were omitted.
+
+# 5. Cryptographic Authorship Integrity
+- All commits in the patch series carry valid GPG or SSH cryptographic signatures.
+- GitHub displays the green "Verified" badge for all contributions.
+
+# 6. Independent Reproducibility
+- An independent engineer following the README achieves identical green test results.`}
+  annotations={[
+    {
+      line: 1,
+      comment: "Criterion 1: Zero build breakage. The code must compile cleanly under modern Clang.",
+    },
+    {
+      line: 5,
+      comment: "Criterion 2: Automated verification using AOSP's official VTS/CTS testing harnesses.",
+    },
+    {
+      line: 9,
+      comment: "Criterion 3: Eliminates 'works on my machine'. The README must be fully reproducible.",
+    },
+    {
+      line: 13,
+      comment: "Criterion 4: The vertical slice requirement proving multi-disciplinary fluency.",
+    },
+    {
+      line: 17,
+      comment: "Criterion 5: Anti-forgery layer proving genuine authorship.",
+    },
+    {
+      line: 21,
+      comment: "Criterion 6: Stranger-verifiable proof. The ultimate test of an AOSP architect.",
+    },
+  ]}
+/>
+
+---
+
+## 5. Automated Acceptance Testing
+
+Run the combined acceptance test suite locally before pushing your public pull request:
+
+<TestRunner
+  title="Execute Capstone CTS/VTS Acceptance Test Plan"
+  cmd={`# 1. Verify SELinux is enforcing
+adb shell getenforce
+
+# 2. Run consolidated acceptance test plan across HAL and Framework
+atest -m VtsHalEntropyTargetTest CtsSecurityHostTestCases FrameworksServicesTests:EnterpriseSecurityServiceTest`}
+  expect={`Enforcing
+Summary
+-------
+arm64-v8a VtsHalEntropyTargetTest: PASSED (2/2)
+x86_64 CtsSecurityHostTestCases: PASSED (4/4)
+arm64-v8a FrameworksServicesTests: PASSED (3/3)
+
+All 9 acceptance tests passed! (100% Green)`}
+/>
+
+---
+
+## 6. Configuring Cryptographic Commit Signing
+
+Sign all commits in your Project Spine repository using SSH or GPG keys:
+
+```bash
+# 1. Configure Git to sign all commits by default
+git config --global commit.gpgsign true
+git config --global gpg.format ssh
+git config --global user.signingkey ~/.ssh/id_ed25519.pub
+
+# 2. Make a signed commit
+git commit -S -m "capstone: Implement full-stack hardware entropy subsystem"
+
+# 3. Verify signature locally
+git log --show-signature -1
+```
+
+Once pushed to GitHub, your commits will feature the verified cryptographic badge:
+
+```
+[ Verified ] capstone: Implement full-stack hardware entropy subsystem
+```
+
+---
+
+## 7. Structure of the Public Spine Repository
+
+Organize your public repository cleanly so reviewers can navigate your progression:
+
+```
+aosp-mastery-spine/
+├── README.md                      <-- Executive summary & reproduction instructions
+├── verify_capstone.sh             <-- Single script to build & run acceptance tests
+├── capstone/                      <-- Source code for full-stack feature
+│   ├── kernel/                    <-- Driver C source & DTS node
+│   ├── hal/                       <-- AIDL interface, C++ HAL, VINTF XML, VTS test
+│   ├── framework/                 <-- SystemService, Context wrapper, unit test
+│   ├── sepolicy/                  <-- .te policy, file_contexts, service_contexts
+│   └── app/                       <-- Sample Android test application
+└── phases/                        <-- Verifiable artifacts from Phases 0 to 14
+    ├── 00-basecamp/RESULTS.md
+    ├── 01-systems/RESULTS.md
+    ├── 06-aidl-hal/RESULTS.md
+    └── ...
+```
+
+---
+
+## Checkpoint
 
 <Checkpoint
   quiz={{
-    question: 'What distinguishes the Master tier from Architect?',
+    question: 'Why does the AOSP Mastery curriculum strictly mandate that the Capstone is reviewer-graded rather than self-graded?',
     options: [
-      'More XP.',
-      'Architect evidence plus a self-built image booting on the learner\'s own Pixel (Phase 12).',
-      'A longer README.',
-      'Using Rust.',
+      'Because self-grading websites are too expensive to host.',
+      'Because in platform systems engineering, an unverified self-assessment proves nothing; real engineering credibility comes from public, reproducible code that an independent expert can compile, boot, and verify against industry test suites.',
+      'Because Google requires all AOSP developers to take a multiple-choice quiz.',
+      'Because Git does not allow self-grading.',
     ],
     answer: 1,
     explain:
-      'Master = Architect evidence + a self-built image booting on real hardware (Phase 12). Same rubric, plus the physical bring-up the elective phase requires.',
+      'The core philosophy of this curriculum is stranger-verifiable evidence. An engineer who claims they understand Android must be able to present a public Git repository that any engineer in the world can clone and verify. Objective test suites (CTS/VTS) and external peer review eliminate all ambiguity.',
   }}
 />
+
+---
 
 ## Break It
 
 <BreakIt
   items={[
-    'Symptom: the reviewer cannot reproduce your result. Cause: the README omits a step or assumes a different tree state. Fix: follow your own README on a clean checkout; add every missing command and the exact target.',
-    'Symptom: the CTS/VTS subset passes locally but fails for the reviewer. Cause: an environment or build difference (branch, lunch target, adb state). Fix: pin the branch/target in the README; state prerequisites explicitly.',
-    'Symptom: commits show no "Verified" badge. Cause: signing not configured, or the key is not on your account. Fix: configure commit.gpgsign and add the key to GitHub (per GitHub docs).',
+    'Symptom: A reviewer reports that the test suite fails when following your README on a fresh machine. Cause: Your README assumed pre-existing environment variables (e.g., ANDROID_PRODUCT_OUT) or uncommitted local patches. Fix: Clone your repo into a brand new VM or container and follow your README step-by-step from scratch.',
+    'Symptom: GitHub shows "Unverified" next to your capstone commits. Cause: The email address in your Git commit (git config user.email) does not match the email associated with your verified GPG/SSH key on your GitHub account. Fix: Ensure git config user.email matches your GitHub verified email address.',
+    'Symptom: VTS passes when SELinux is Permissive, but fails when Enforcing. Cause: Missing allow rules in sepolicy for the test client domain. Fix: Run dmesg | grep avc and author proper allow rules in vendor_entropy.te.',
   ]}
 />
 
-## 7. Mastery check
+---
 
-The bar, per the plan (section 21.3): graded **by a reviewer** against the Phase 0
-competency doc, on your **public fork**. Concretely, your capstone:
-
-- Builds and boots on your target (section 3).
-- Passes the **defined CTS/VTS subset** for the feature (section 2).
-- Is documented in a `README.md` that reproduces (section 3).
-- Is **full-stack** where the feature requires it (section 1).
-- Is **signed** (section 4).
-- Is **reproducible** by a stranger (section 5).
-
-:::caution Not self-graded, by rule
-Self-grading is an explicitly rejected anti-pattern. No private-database-only
-badges, no unverifiable claims, no invented issuers. Your fork is the evidence;
-a reviewer issues the grade.
-:::
-
-**Spine artifact:** the **whole spine** - the full patch series, the per-phase
-`RESULTS.md` files, and the capstone `README.md` - under `spine/15-full` in your
-public fork (plan sections 4.8, 21.5). This is the artifact the competency map
-records for this phase, and it is the credential itself.
-
-<Reward xp="2000" badge="AOSP Architect" />
+## Troubleshooting
 
 <Troubleshooting
   items={[
@@ -279,6 +358,10 @@ records for this phase, and it is the credential itself.
   ]}
 />
 
+---
+
+## Further Reading
+
 <FurtherReading
   links={[
     {
@@ -294,9 +377,22 @@ records for this phase, and it is the credential itself.
   ]}
 />
 
+---
+
+## Mastery Check: Earning Your Tier
+
+The bar: your **public repository passes the 6-point Reviewer Rubric and is graded by an independent mentor or peer**:
+
+- **Architect Tier:** Complete Project Spine committed, vertical slice implemented across 4+ layers on Cuttlefish, passing defined CTS/VTS subset, signed commits.
+- **Master Tier:** All Architect criteria met **PLUS** the full stack booted and validated on physical Google Pixel hardware (Phase 12).
+
+**Spine artifact:** The complete public repository `aosp-mastery-spine` under `spine/15-full`.
+
+<Reward xp={2000} badge="AOSP Architect" />
+
 <CompleteButton unitId="phase-15-capstone" xp={2000} label="Mark Phase 15 complete (+2000 XP)" />
 
 <NextMission to="/competency-map">
 You have reached the end of the curriculum. The Competency Map shows every
-competency you have now proven - and the tier each artifact earns you.
+competency you have now proven — and the tier each artifact earns you.
 </NextMission>

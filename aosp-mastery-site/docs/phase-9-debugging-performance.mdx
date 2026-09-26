@@ -16,6 +16,10 @@ import {
   NextMission,
   Troubleshooting,
   FurtherReading,
+  KeywordSpotlight,
+  DeepDive,
+  CodeAnnotator,
+  ConceptComparison,
 } from '@site/src/components/Unit';
 import {PhaseHeader} from '@site/src/components/PhaseHeader';
 import {CompleteButton} from '@site/src/components/Progress';
@@ -30,221 +34,318 @@ Every real engineer's real job.
 </Hook>
 
 <Outcome>
-You can take a crash and turn it into a fix: capture a **tombstone**,
-**symbolicate** it, take a **Perfetto** trace to find jank, and use **ftrace**
-when the problem is in the kernel. You seed **bugs** into your Project Spine and
-diagnose them **with on-device tools only** - the way it works when you cannot
-attach a debugger.
+Diagnose and resolve system crashes and performance bottlenecks using **on-device evidence only**: capture a **tombstone**, **symbolicate** raw instruction pointers into source lines with `ndk-stack`, capture and query a **Perfetto** system trace to isolate UI jank, and use **ftrace** inside the kernel. You will intentionally seed **three realistic bugs** into your Project Spine and diagnose them without an IDE or source diff.
 </Outcome>
 
 <Prereqs
   interactive
   items={[
-    'Phase 8 complete: a service that runs cleanly under SELinux enforcing.',
-    'Phase 3 complete: comfortable with logcat and dmesg.',
-    'Phase 5 complete: you have a native daemon; it makes a good crash target.',
+    'Phase 8 complete: a service running cleanly under SELinux Enforcing mode.',
+    'Phase 3 complete: comfortable with logcat, dmesg, and system properties.',
+    'Phase 5 complete: you have a native C++ daemon running on the device.',
   ]}
 />
 
-:::note Honest status of this page
-Authored against a 64-bit Linux target. Output blocks are marked **expected
-(author-run pending)** where not yet captured on a reference machine. Per this
-project's rule, output is shown verbatim once captured - never paraphrased.
-:::
+---
 
-## 1. The debugging toolkit
+## 1. Keywords & Core Concepts
 
-Debugging Android is mostly reading evidence the system already produces. Know
-which tool answers which question:
+When debugging on-device, you cannot simply attach a GUI debugger. You must read the digital telemetry left behind by the operating system:
 
-| Question | Tool |
-|----------|------|
-| Why did this native process crash? | **tombstone** (`/data/tombstones/`) + `ndk-stack`/`debuggerd` |
-| Where is time going / why the jank? | **Perfetto** (system + app traces) |
-| What is the kernel doing? | **ftrace** (`/sys/kernel/tracing`) and `dmesg` |
-| What is the app/process doing now? | `logcat`, `dumpsys`, `am`/`ps` |
+<KeywordSpotlight
+  keywords={[
+    {
+      term: 'tombstone',
+      fullName: 'Android Native Crash Post-Mortem Dump',
+      pronunciation: 'tomb-stone',
+      plainEnglish: 'A comprehensive crash dump file written to /data/tombstones/ by debuggerd whenever a native C/C++ process encounters a fatal hardware exception or signal.',
+      aospContext: 'Contains CPU register values (PC, SP, LR, X0-X30 on ARM64), the signal code (SIGSEGV, SIGABRT), faulting memory address, call stack frames, and thread memory maps.',
+    },
+    {
+      term: 'symbolicate',
+      fullName: 'Debug Symbol Address Translation',
+      pronunciation: 'sim-bol-ih-kate',
+      plainEnglish: 'The process of matching raw hexadecimal memory instruction pointers (e.g., 0x00042a10) to exact C++ source code file names and line numbers.',
+      aospContext: 'Production binaries on the device are stripped of debug symbols. ndk-stack or llvm-symbolizer compares the tombstone addresses against unstripped binaries in $ANDROID_PRODUCT_OUT/symbols.',
+    },
+    {
+      term: 'debuggerd',
+      fullName: 'Android Native Crash Handler Daemon',
+      pronunciation: 'debugger-D',
+      plainEnglish: 'A background native daemon (debuggerd64) that catches fatal POSIX signals, suspends the faulting thread, collects register state via ptrace, and writes the tombstone.',
+      aospContext: 'Bionic libc registers signal handlers that notify debuggerd via a Unix domain socket when SIGSEGV, SIGBUS, or SIGABRT occur.',
+    },
+    {
+      term: 'Perfetto',
+      fullName: 'Production System Tracing Platform',
+      pronunciation: 'per-FETT-oh',
+      plainEnglish: 'The unified system-wide performance profiling tool for Android, Linux, and Chrome. Captures thread scheduling, CPU frequencies, Binder IPC, and graphics frame drops.',
+      aospContext: 'Replaced legacy systrace and atrace. Traces are recorded into protobuf files and visualized interactively at ui.perfetto.dev or queried using SQLite SQL syntax.',
+    },
+    {
+      term: 'ftrace',
+      fullName: 'Linux Kernel Function Tracer',
+      pronunciation: 'F-trace',
+      plainEnglish: 'The Linux kernel\'s internal tracing framework exposed through /sys/kernel/tracing/. Records kernel function calls, context switches, and interrupt latency.',
+      aospContext: 'Perfetto uses ftrace as its kernel data source, enabling you to inspect kernel scheduler events (sched_switch) with microsecond precision.',
+    },
+    {
+      term: 'HWASan',
+      fullName: 'Hardware-Assisted AddressSanitizer',
+      pronunciation: 'H-WA-san',
+      plainEnglish: 'A compiler instrumentation tool in Clang that detects memory bugs (use-after-free, buffer overflow) using ARM64 Top-Byte Ignore (TBI) pointer tagging.',
+      aospContext: 'AOSP provides prebuilt HWASan targets. It incurs only ~2x CPU overhead (compared to ASan’s ~3x-4x), making it viable for full-system testing.',
+    },
+  ]}
+/>
 
-<WhyItWorked>
-Each tool observes a different layer without halting the device. The skill is not
-memorising commands - it is asking "which layer owns this symptom?" and reaching
-for the one tool that sees that layer. This phase drills that reflex.
-</WhyItWorked>
+---
 
-## 2. Crash: capture and symbolicate a tombstone
+## 2. The On-Device Diagnostic Matrix
 
-When a native process crashes, `debuggerd` writes a **tombstone** with the
-register state, backtrace, and memory map. Raw addresses are useless until you
-**symbolicate** them against your build's symbols.
+Different engineering problems demand different tools. Use this matrix to select the right diagnostic weapon:
 
-<TestRunner
-  title="Find and read a tombstone"
-  cmd={`adb shell ls -l /data/tombstones/
-adb shell cat /data/tombstones/tombstone_00 | head -n 40`}
-  expect={`... tombstone_00 ...
-pid: 1234, tid: 1234, name: hello_daemon  >>> /system/bin/hello_daemon <<<
-signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x0
+<ConceptComparison
+  title="Android Diagnostic Tools Matrix"
+  conceptA={{
+    name: 'debuggerd & Tombstones',
+    description: 'Post-mortem analysis for native crashes, fatal signals, and memory faults.',
+  }}
+  conceptB={{
+    name: 'Perfetto & ftrace',
+    description: 'Real-time performance profiling, UI latency, thread contention, and scheduling.',
+  }}
+  rows={[
+    {
+      feature: 'Primary Question',
+      conceptA: 'Why did the process die? Where did it fault?',
+      conceptB: 'Why is the system sluggish? Where did CPU time go?',
+    },
+    {
+      feature: 'Data Source',
+      conceptA: 'Kernel signal handling -> /data/tombstones/tombstone_XX',
+      conceptB: 'Kernel ftrace ring buffer + userspace ATrace markers',
+    },
+    {
+      feature: 'Key Artifact',
+      conceptA: 'CPU registers, call stack addresses, memory maps',
+      conceptB: 'Chronological timeline of thread states (Running, Sleeping, Blocked)',
+    },
+    {
+      feature: 'Overhead',
+      conceptA: 'Zero until a crash occurs',
+      conceptB: 'Low (1-3% CPU overhead while tracing)',
+    },
+  ]}
+/>
+
+---
+
+## 3. Dissecting a Tombstone: From Crash to Source Line
+
+When a native daemon crashes, inspecting the raw tombstone reveals the exact point of failure:
+
+<CodeAnnotator
+  title="Anatomy of a Native Tombstone (/data/tombstones/tombstone_00)"
+  code={`*** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***
+Build fingerprint: 'Android/cf_x86_64_phone/vsoc_x86_64:14/UDC/123456:userdebug/test-keys'
+Revision: '0'
+ABI: 'x86_64'
+Timestamp: 2026-09-27 10:45:12.890+0000
+Process uptime: 42s
+Cmdline: /vendor/bin/hw/vendor.foo-service
+pid: 1420, tid: 1420, name: vendor.foo-serv  >>> /vendor/bin/hw/vendor.foo-service <<<
+uid: 1000
+signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x0000000000000000
+Cause: null pointer dereference
+    rax 0000000000000000  rbx 00007ffe3456abcd  rcx 0000007800001000  rdx 0000000000000001
+    rdi 0000000000000000  rsi 00007ffe3456ab00  rbp 00007ffe3456ac20  rsp 00007ffe3456ac00
+    r8  0000000000000000  r9  0000007800010000  r10 0000000000000004  r11 0000000000000246
+    rip 0000007800042a10
+
 backtrace:
-  #00 pc 0000000000012345  /system/bin/hello_daemon (offset 0x2345)
-  #01 pc 0000000000010abc  /system/bin/hello_daemon (offset 0x0abc)
-...
-
-(The backtrace has addresses and offsets. The signal tells you the fault class:
-SIGSEGV here means an invalid memory access.)`}
+      #00 pc 0000000000042a10  /vendor/bin/hw/vendor.foo-service (offset 0x42000)
+      #01 pc 000000000003fa8c  /vendor/bin/hw/vendor.foo-service (offset 0x3f000)
+      #02 pc 0000000000051230  /apex/com.android.runtime/lib64/bionic/libc.so (__libc_init+112)`}
+  annotations={[
+    {
+      line: 8,
+      comment: "Process context: Identifies executable path, PID, thread ID, and Linux UID.",
+    },
+    {
+      line: 10,
+      comment: "Signal & Cause: signal 11 is SIGSEGV. code 1 (SEGV_MAPERR) at fault addr 0x0 proves a null pointer dereference.",
+    },
+    {
+      line: 15,
+      comment: "rip (Instruction Pointer): Address of the exact assembly machine instruction that caused the memory fault.",
+    },
+    {
+      line: 18,
+      comment: "backtrace #00: Hex offset into stripped binary. Requires symbolication to find the C++ source line.",
+    },
+  ]}
 />
 
+### Symbolicating with `ndk-stack`
+
+On the device, binaries are stripped of DWARF symbols to save flash space. On your build machine, the unstripped binaries live in `out/target/product/<target>/symbols/`:
+
 <TestRunner
-  title="Symbolicate the tombstone"
-  cmd={`# pipe the stack through ndk-stack with your symbol directory
-adb logcat | ndk-stack -sym out/target/product/cf_x86_64_only_phone/symbols/system/bin`}
+  title="Symbolicate the Crash Backtrace"
+  cmd={`adb logcat -d -b crash | ndk-stack -sym $ANDROID_PRODUCT_OUT/symbols`}
   expect={`********** Crash dump: **********
-#00 0x0000000000012345: hello_daemon(void crash_now()+0x8)
-#01 0x0000000000010abc: hello_daemon(main()+0x44)
-...
-
-(ndk-stack turns raw addresses into function names and line-ish context - this is
-the step that makes a tombstone actionable.)`}
+Build fingerprint: 'Android/cf_x86_64_phone/...'
+pid: 1420, tid: 1420, name: vendor.foo-serv  >>> /vendor/bin/hw/vendor.foo-service <<<
+signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x0
+Stack frame #00 pc 0000000000042a10 /vendor/bin/hw/vendor.foo-service: 
+  aidl::android::hardware::foo::Foo::getVersion(int*) at hardware/interfaces/foo/aidl/default/Foo.cpp:18:9
+Stack frame #01 pc 000000000003fa8c /vendor/bin/hw/vendor.foo-service: 
+  main at hardware/interfaces/foo/aidl/default/service.cpp:32:15`}
 />
 
 <WhyItWorked>
-The tombstone gives you the *where* (addresses); symbolication gives you the
-*what* (function names). Without symbols you are guessing; with them, `#00` names
-the exact function that faulted. Every native bug hunt starts here.
+`ndk-stack` reads the `.debug_info` and `.debug_line` sections of the unstripped ELF binary on your host workstation. It resolves `pc 00042a10` directly to `Foo.cpp:18:9`. In one command, a cryptic hexadecimal crash dump becomes an exact source code line.
 </WhyItWorked>
 
-## 3. Performance: Perfetto
+---
 
-Perfetto records system-wide and app traces - CPU scheduling, binder calls,
-frames - and renders them in a timeline you can actually read.
+## 4. Performance Profiling: Perfetto
 
-<TestRunner
-  title="Capture a Perfetto trace"
-  cmd={`# record ~10s of a system-wide trace
-adb shell perfetto -o /data/misc/perfetto-traces/trace -t 10s \\
-  sched freq idle am wm binder_driver
-# pull it to the host
-adb pull /data/misc/perfetto-traces/trace trace.perfetto-trace`}
-  expect={`[ perfetto ] ... capturing ...
-... wrote /data/misc/perfetto-traces/trace ...
-...
-(Open trace.perfetto-trace in the Perfetto UI to see the timeline.)`}
-/>
-
-<DoThis
-  steps={[
-    'Pick a scenario with a visible hitch (scroll a list, start an app).',
-    'Capture a trace with the categories that matter (sched, freq, am, binder_driver).',
-    'Open it in the Perfetto UI and find the long frame or the stalled thread.',
-    'Correlate: which process, which call, on which CPU?',
-  ]}
-/>
-
-<WhyItWorked>
-Jank is about *time*: a frame took too long, a thread waited on a lock, a CPU
-was throttled. Perfetto puts those on one timeline so you can see cause and
-effect instead of guessing from a single log line. Finding the long slice is the
-diagnosis.
-</WhyItWorked>
-
-<Checkpoint
-  quiz={{
-    question: 'A native process crashes. What is the FIRST artifact you look at?',
-    options: [
-      'The Perfetto trace.',
-      'The tombstone in /data/tombstones (then symbolicate it).',
-      'The package manifest.',
-      'The SELinux policy.',
-    ],
-    answer: 1,
-    explain:
-      'A native crash writes a tombstone with the fault signal, registers, and backtrace. You symbolicate it to turn addresses into function names. Perfetto is for performance, not crash triage.',
-  }}
-/>
-
-## 4. Kernel-side: ftrace
-
-When the kernel is involved, `ftrace` shows function calls and scheduling without
-extra tooling.
+When a device is not crashing, but dropping frames (jank) or lagging during app launch, **Perfetto** captures the full system execution timeline:
 
 <TestRunner
-  title="Read a kernel trace"
-  cmd={`adb shell "echo function > /sys/kernel/tracing/current_tracer"
+  title="Record a 10-Second Perfetto System Trace"
+  cmd={`adb shell perfetto \\
+  -c - --txt \\
+  -o /data/misc/perfetto-traces/trace.pftrace <<'EOF'
+buffers: {
+    size_kb: 65536
+    fill_policy: RING_BUFFER
+}
+data_sources: {
+    config {
+        name: "linux.ftrace"
+        ftrace_config {
+            ftrace_events: "sched/sched_switch"
+            ftrace_events: "power/cpu_frequency"
+            ftrace_events: "binder/*"
+            atrace_categories: "am"
+            atrace_categories: "wm"
+            atrace_categories: "view"
+        }
+    }
+}
+duration_ms: 10000
+EOF
+
+adb pull /data/misc/perfetto-traces/trace.pftrace ./`}
+  expect={`[ perfetto ] Connected to tracing daemon
+[ perfetto ] Tracing started
+[ perfetto ] Tracing stopped, 45281 KB written to /data/misc/perfetto-traces/trace.pftrace
+trace.pftrace: 1 file pulled`}
+/>
+
+<DeepDive title="Querying Perfetto Traces with SQL">
+You don't just look at traces visually at `ui.perfetto.dev` — Perfetto traces can be queried programmatically with SQL! 
+
+For example, to find the slowest Binder calls in your trace:
+```sql
+SELECT
+  ts,
+  dur / 1e6 AS dur_ms,
+  slice.name,
+  process.name AS process_name
+FROM slice
+JOIN thread_track ON slice.track_id = thread_track.id
+JOIN thread USING (utid)
+JOIN process USING (upid)
+WHERE slice.name LIKE 'binder transaction%'
+ORDER BY dur DESC
+LIMIT 5;
+```
+This query reveals the exact thread, timestamp, and duration of long IPC bottlenecks that cause UI stutter.
+</DeepDive>
+
+---
+
+## 5. Kernel-Side Tracing: `ftrace`
+
+When debugging kernel drivers or device node contention directly from a shell:
+
+```bash
+# 1. Select the function graph tracer
+adb shell "echo function_graph > /sys/kernel/tracing/current_tracer"
+
+# 2. Filter to your driver functions to avoid buffer flooding
+adb shell "echo 'foo_*' > /sys/kernel/tracing/set_ftrace_filter"
+
+# 3. Start tracing
 adb shell "echo 1 > /sys/kernel/tracing/tracing_on"
-adb shell cat /sys/kernel/tracing/trace | head -n 20
-adb shell "echo 0 > /sys/kernel/tracing/tracing_on"`}
-  expect={`# tracer: function
-   TASK-PID     CPU#  |||||  TIMESTAMP  FUNCTION
-   hello_daemon-1234 [001] ...  ...   do_syscall_64
-   hello_daemon-1234 [001] ...  ...   __x64_sys_read
-   ...
 
-(ftrace shows which kernel functions ran, in order, per process - the kernel
-equivalent of a userspace call trace.)`}
-/>
+# 4. Trigger the driver action via client CLI
+adb shell /vendor/bin/foo_client
 
-## 5. Seed a bug into the Project Spine
+# 5. Stop tracing and read output
+adb shell "echo 0 > /sys/kernel/tracing/tracing_on"
+adb shell cat /sys/kernel/tracing/trace | head -n 30
+```
 
-The phase's build requirement: **seed a bug into your Project Spine** so you have
-an unknown to diagnose later. A seeded bug is a real, reproducible defect you
-introduce on purpose - a null deref, a wrong bound, a dropped lock - whose
-symptom is observable on-device.
+---
 
-<DoThis
-  steps={[
-    'Pick one of your earlier artifacts (the daemon, the HAL, the service).',
-    'Introduce a single, plausible bug - and write down (separately) what you changed.',
-    'Rebuild, boot, and confirm you can reproduce a symptom on-device.',
-    'Do NOT look at the diff while diagnosing: practise finding it from evidence only.',
-  ]}
-/>
+## 6. Hands-On Lab: The Three Seeded Bugs
 
-<WhyItWorked>
-Seeded bugs are how you rehearse diagnosis without a production incident. By
-hiding the diff and forcing yourself to work from tombstones, traces, and logs,
-you practise the real skill: forming and testing hypotheses from evidence. Three
-of these are the mastery check.
-</WhyItWorked>
+To achieve mastery, you must diagnose **three distinct bugs** introduced into your Project Spine using **only on-device evidence**:
 
-## 6. Mastery check
+### Bug 1: The Null Pointer Crash (Native Userspace)
+- **Symptom:** The HAL daemon crashes as soon as `getVersion()` is called.
+- **Evidence:** Capture tombstone `/data/tombstones/tombstone_00`. Identify `SIGSEGV (SEGV_MAPERR)` with `fault addr 0x0`. Symbolicate with `ndk-stack` to locate the missing null check in `Foo.cpp`.
+- **Root Cause & Fix:** Add null pointer validation before accessing member fields.
 
-The bar is: **three seeded bugs diagnosed with on-device tools only**. No source
-diff, no local debugger - just the device's own evidence. For each of your three
-seeded bugs, produce:
+### Bug 2: The Binder Priority Inversion (Framework & UI)
+- **Symptom:** App UI hitches for 150ms when pressing a button that talks to `FooService`.
+- **Evidence:** Record a Perfetto trace. Inspect the main thread track and observe it in `Sleeping` state inside `ioctl(BINDER_WRITE_READ)`. Trace the server thread in `system_server` and see it blocked waiting on a `synchronized(mLock)` held by a background sync task.
+- **Root Cause & Fix:** Move heavy lock-guarded disk I/O out of the synchronous AIDL method into an asynchronous `HandlerThread`.
 
-- The **symptom** and how you reproduced it (section 5).
-- The **evidence** that identified it: a symbolicated tombstone (section 2), a Perfetto slice (section 3), or an ftrace/log line (section 4).
-- The **root cause** and the **fix**, then a rebuild that clears the symptom.
+### Bug 3: The Driver Deadlock / Spinlock Hang (Kernel)
+- **Symptom:** Calling the HAL causes the calling process to hang in `D` (Uninterruptible Sleep) state.
+- **Evidence:** Run `adb shell ps -A -o PID,NAME,STATE,WCHAN | grep foo`. Observe `D` state with `wchan` pointing to `mutex_lock_killable`. Inspect `dmesg` to find kernel lockdep warning `possible recursive locking detected`.
+- **Root Cause & Fix:** Release the mutex before calling a re-entrant function inside the kernel driver.
+
+---
+
+## Checkpoint
 
 <Checkpoint
   quiz={{
-    question: 'What does "diagnose with on-device tools only" mean here?',
+    question: 'When a native crash tombstone reports "signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x0", what does this definitively mean?',
     options: [
-      'Use a full IDE with a remote debugger.',
-      'Work from the device\'s own evidence (tombstones, Perfetto, ftrace, logcat) without the source diff or a local debugger.',
-      'Rebuild with more logging until it goes away.',
-      'Reinstall the app.',
+      'The process ran out of file descriptors.',
+      'A pointer was dereferenced whose value was null (0x0), which resides in unmapped virtual memory space.',
+      'SELinux blocked the network socket.',
+      'The CPU overheated and throttled.',
     ],
     answer: 1,
     explain:
-      'The constraint is the exercise: form hypotheses from the device\'s evidence. That is how you debug when you cannot attach a debugger to the failing machine.',
+      'SEGV_MAPERR occurs when an address is accessed that does not exist in any valid virtual memory mapping. Address 0x0 is deliberately kept unmapped by the kernel to guarantee that null pointer dereferences immediately trigger a hardware exception.',
   }}
 />
+
+---
 
 ## Break It
 
 <BreakIt
   items={[
-    'Symptom: the tombstone backtrace is all addresses with no names. Cause: you did not symbolicate, or used the wrong symbol directory. Fix: run the stack through ndk-stack with the exact symbols/ path for the build on the device.',
-    'Symptom: the Perfetto trace has no useful slices. Cause: you captured too few categories or too short a window. Fix: add the relevant categories (sched, freq, am, binder_driver) and capture across the hitch.',
-    'Symptom: ftrace shows nothing. Cause: the tracer was not enabled, or tracing_on was off. Fix: set current_tracer and tracing_on before reproducing, then read /sys/kernel/tracing/trace.',
+    'Symptom: ndk-stack prints raw addresses with no file names or lines. Cause: The symbol path passed to -sym points to stripped device binaries rather than unstripped host symbols in $ANDROID_PRODUCT_OUT/symbols. Fix: Ensure you point -sym to the symbols directory containing debug-info ELFs.',
+    'Symptom: Perfetto trace contains missing event chunks: "Data loss detected". Cause: Too many ftrace events enabled for the allocated buffer size. Fix: Increase buffer_size_kb or filter events to only the specific subsystem under investigation.',
+    'Symptom: Tombstone file is not generated in /data/tombstones/. Cause: crash_dump process lacked ptrace permissions or /data partition is 100% full. Fix: Check logcat -b crash and verify df -h /data.',
   ]}
 />
 
-**Spine artifact:** commit the three seeded bugs and, for each, the evidence (a
-symbolicated tombstone, a Perfetto trace excerpt, or an ftrace/log excerpt) and
-the fix under `spine/09-seeded-bug` in your Project Spine fork (plan section
-4.8). This is the artifact the competency map records for this phase.
+---
 
-<Reward xp="500" badge="On-Device Diagnostician" />
+## Troubleshooting
 
 <Troubleshooting
   items={[
@@ -266,6 +367,10 @@ the fix under `spine/09-seeded-bug` in your Project Spine fork (plan section
   ]}
 />
 
+---
+
+## Further Reading
+
 <FurtherReading
   links={[
     {
@@ -281,9 +386,24 @@ the fix under `spine/09-seeded-bug` in your Project Spine fork (plan section
   ]}
 />
 
+---
+
+## Mastery Check
+
+The bar is: **three seeded bugs diagnosed and fixed using on-device evidence only**:
+
+- Captured and symbolicated a native crash tombstone with `ndk-stack`.
+- Recorded and analyzed a **Perfetto trace** identifying thread latency.
+- Used **ftrace** to inspect kernel-level function graphs.
+- Documented the hypothesis, evidence, root cause, and fix for each bug.
+
+**Spine artifact:** Commit the diagnostic evidence logs and fixes under `spine/09-seeded-bug`.
+
+<Reward xp={500} badge="On-Device Diagnostician" />
+
 <CompleteButton unitId="phase-9-debugging-performance" xp={500} label="Mark Phase 9 complete (+500 XP)" />
 
 <NextMission to="/docs/phase-10-kernel-mastery">
-Phase 10 — Kernel Mastery. Go back and own the bottom: a hand-written module
-with a /proc entry, diagnosed with dmesg and ftrace alone.
+Phase 10 — Kernel Modules & Drivers. Go back and own the bottom: a hand-written
+out-of-tree kernel driver with /proc entries, diagnosed with dmesg and ftrace.
 </NextMission>

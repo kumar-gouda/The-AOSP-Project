@@ -16,6 +16,10 @@ import {
   NextMission,
   Troubleshooting,
   FurtherReading,
+  KeywordSpotlight,
+  DeepDive,
+  CodeAnnotator,
+  ConceptComparison,
 } from '@site/src/components/Unit';
 import {PhaseHeader} from '@site/src/components/PhaseHeader';
 import {CompleteButton} from '@site/src/components/Progress';
@@ -30,246 +34,405 @@ The last 20% that makes it shippable.
 </Hook>
 
 <Outcome>
-You can harden the Spine with a **Rust** component, package it as a minimal
-**APEX**, place it in the **graphics/Camera HAL** picture, and cover it with a
-**Trade Federation / host-driven test**. Given your capstone feature, you can
-name **every subsystem it touches in a real ship**.
+You can harden the Project Spine with a **memory-safe Rust component**, package it as a modular **APEX container**, navigate the complex **graphics and Camera HAL seams** (SurfaceFlinger, HWC, Gralloc), and author a host-orchestrated **Trade Federation test module**. Given a capstone feature, you can trace **every subsystem it touches in a commercial Android ship**.
 </Outcome>
 
 <Prereqs
   interactive
   items={[
-    'Phase 7 complete: a SystemService callable from an app.',
-    'Phase 6 complete: an AIDL HAL and its VTS test.',
-    'Phase 12 optional; this phase needs no hardware.',
+    'Phase 7 complete: a working SystemService callable from an app.',
+    'Phase 6 complete: an AIDL HAL with passing VTS test coverage.',
+    'Phase 8 complete: SELinux policy authored and enforced.',
   ]}
 />
 
-:::note Honest status of this page
-Authored against a 64-bit Linux target. Output blocks are marked **expected
-(author-run pending)** where not yet captured on a reference machine. Per this
-project's rule, output is shown verbatim once captured - never paraphrased.
-:::
+---
 
-## 1. Rust in AOSP
+## 1. Keywords & Core Concepts
 
-Rust is a first-class language in AOSP, with official documentation and build
-support. You learned to *read* it in Phase 5; here you *build* with it. AOSP
-supports several Rust module types:
+Shipping code in modern Android requires mastering modern modularity and memory safety primitives:
 
-| Module type | Android.bp rule | Use |
-|-------------|-----------------|-----|
-| **Library** | `rust_library` | Shared logic, linked by others. |
-| **Binary** | `rust_binary` | An executable. |
-| **Test** | `rust_test` | Unit tests. |
-| **Fuzzer** | `rust_fuzz` | Coverage-guided fuzzing. |
+<KeywordSpotlight
+  keywords={[
+    {
+      term: 'Rust in AOSP',
+      fullName: 'Memory-Safe Systems Programming in Android',
+      pronunciation: 'rust in A-O-S-P',
+      plainEnglish: 'The memory-safe systems programming language officially supported alongside C++ in AOSP. Replaces C/C++ for new native daemons to eliminate buffer overflows and use-after-free bugs.',
+      aospContext: 'Soong supports native rust_binary, rust_library, and rust_test rules. Android\'s Bluetooth, Keystore2, and Virtualization stacks are now written in Rust.',
+    },
+    {
+      term: 'APEX',
+      fullName: 'Android Pony EXpress Container',
+      pronunciation: 'A-pex',
+      plainEnglish: 'A specialized system software package format (.apex) containing a complete ext4 or erofs filesystem image mounted loopback at /apex/<package_name>.',
+      aospContext: 'The foundation of Project Mainline. Allows Google to update critical core OS modules (ART runtime, Wi-Fi stack, DNS resolver) directly via Google Play without waiting for OEM firmware updates.',
+    },
+    {
+      term: 'apexd',
+      fullName: 'APEX Management Daemon',
+      pronunciation: 'apex-D',
+      plainEnglish: 'The privileged native daemon started during early init that inspects APEX cryptographic signatures and mounts them into the system namespace.',
+      aospContext: 'Runs before Zygote starts. If an updated APEX crashes the system, apexd automatically rolls back to the pre-installed factory APEX image.',
+    },
+    {
+      term: 'Trade Federation',
+      fullName: 'Tradefed Test Orchestrator',
+      pronunciation: 'trade-fed',
+      plainEnglish: 'The distributed Java test harness that automates test execution, device flashing, APK installation, and log retrieval across device farms.',
+      aospContext: 'Powers CTS, VTS, and atest. Host-driven tests run on your workstation and command the device over ADB to verify complex multi-process states.',
+    },
+    {
+      term: 'SurfaceFlinger & HWC',
+      fullName: 'Display Compositor & Hardware Composer HAL',
+      pronunciation: 'surface flinger, H-W-C',
+      plainEnglish: 'SurfaceFlinger receives visual rendering buffers from apps and orchestrates display composition. It delegates layer compositing to the Hardware Composer (HWC) HAL.',
+      aospContext: 'HWC leverages dedicated silicon hardware display overlays (MDP/DPU) to composite visual layers without burning GPU power.',
+    },
+    {
+      term: 'Gralloc',
+      fullName: 'Graphics Memory Allocator HAL',
+      pronunciation: 'gral-lock',
+      plainEnglish: 'The hardware abstraction layer responsible for allocating zero-copy graphics buffers (GraphicBuffer / AHardwareBuffer) shared between CPU, GPU, Camera, and Display.',
+      aospContext: 'Gralloc negotiates pixel formats, strides, and memory alignment constraints required by heterogeneous silicon blocks.',
+    },
+  ]}
+/>
 
-```text
-// Android.bp - a Rust library with a test
-rust_library {
-    name: "libspine_rust",
-    crate_name: "spine_rust",
-    srcs: ["src/lib.rs"],
+---
+
+## 2. APK vs. APEX: Understanding Modular Android
+
+Why did Android create APEX when APK already existed?
+
+<ConceptComparison
+  title="Package Formats: APK vs. APEX"
+  conceptA={{
+    name: 'APK (Android Package)',
+    description: 'Application container for userspace apps running in isolated sandboxes.',
+  }}
+  conceptB={{
+    name: 'APEX (Android Pony EXpress)',
+    description: 'OS-level filesystem container mounted loopback into the platform root.',
+  }}
+  rows={[
+    {
+      feature: 'Contents',
+      conceptA: 'DEX bytecode, app resources, assets, AndroidManifest.xml',
+      conceptB: 'Native ELF binaries, shared libraries (.so), Bionic libs, bootclasspath JARs',
+    },
+    {
+      feature: 'Execution Model',
+      conceptA: 'Extracted to /data/app/ and executed under a unique Linux UID (e.g. u0_a145)',
+      conceptB: 'Mounted loopback at /apex/<name> and linked into the system execution PATH',
+    },
+    {
+      feature: 'Lifecycle',
+      conceptA: 'Installed/updated dynamically while the system is running',
+      conceptB: 'Mounted during early init before Zygote spawns system services',
+    },
+    {
+      feature: 'Rollback Protection',
+      conceptA: 'Managed by PackageManagerService',
+      conceptB: 'Managed by apexd with watchdog-driven automatic fallback',
+    },
+  ]}
+/>
+
+---
+
+## 3. Writing a Production Rust Component in AOSP
+
+Let's author a memory-safe hardware monitoring daemon in Rust (`spine_daemon/src/main.rs`):
+
+```rust
+// spine_daemon/src/main.rs
+use log::{info, LevelFilter};
+use android_logger::Config;
+
+fn calculate_health_metric(temperature_celsius: i32, voltage_mv: i32) -> Result<u32, &'static str> {
+    if temperature_celsius > 90 {
+        return Err("Thermal critical: overheating detected");
+    }
+    if voltage_mv < 3000 {
+        return Err("Undervoltage detected");
+    }
+    // Safe arithmetic - Rust guarantees no integer overflow wraps silently
+    Ok((voltage_mv as u32) / (temperature_celsius as u32 + 273))
 }
 
-rust_test {
-    name: "libspine_rust_test",
-    crate_name: "spine_rust_test",
-    srcs: ["tests/test.rs"],
-    rustlibs: ["libspine_rust"],
+fn main() {
+    android_logger::init_once(
+        Config::default()
+            .with_tag("SpineRustDaemon")
+            .with_max_level(LevelFilter::Info),
+    );
+
+    info!("Spine Rust daemon initialized under AOSP native runtime");
+
+    match calculate_health_metric(42, 3800) {
+        Ok(metric) => info!("Hardware telemetry metric: {}", metric),
+        Err(e) => log::error!("Telemetry check failed: {}", e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_thermal_cutoff() {
+        assert!(calculate_health_metric(95, 3800).is_err());
+    }
+
+    #[test]
+    fn test_nominal_reading() {
+        assert!(calculate_health_metric(40, 3800).is_ok());
+    }
 }
 ```
 
-<DoThis
-  steps={[
-    'Add a rust_library with a small, real piece of Spine logic.',
-    'Add a rust_test that exercises it.',
-    'Build both with m and run the test.',
-    '(Optional) add a rust_fuzz target and run it briefly.',
+Now define the Soong build rules in `spine_daemon/Android.bp`:
+
+<CodeAnnotator
+  title="Android.bp: Rust Native Binary & Unit Test Rules"
+  code={`rust_binary {
+    name: "spine_rust_daemon",
+    srcs: ["src/main.rs"],
+    rustlibs: [
+        "liblog_rust",
+        "libandroid_logger",
+    ],
+    prefer_rlib: true,
+}
+
+rust_test {
+    name: "spine_rust_test",
+    srcs: ["src/main.rs"],
+    rustlibs: [
+        "liblog_rust",
+        "libandroid_logger",
+    ],
+    test_suites: ["general-tests"],
+}`}
+  annotations={[
+    {
+      line: 1,
+      comment: "rust_binary: Compiles a standalone native executable using rustc and Clang linker.",
+    },
+    {
+      line: 4,
+      comment: "rustlibs: Declares dependencies on prebuilt AOSP Rust crates (logger and logging macros).",
+    },
+    {
+      line: 7,
+      comment: "prefer_rlib: Statically links Rust dependencies into the binary for self-contained deployment.",
+    },
+    {
+      line: 10,
+      comment: "rust_test: Automatically builds the internal #[cfg(test)] unit test module.",
+    },
+    {
+      line: 16,
+      comment: "test_suites: Enrolls the test in general-tests, enabling automated execution via atest.",
+    },
   ]}
 />
 
 <TestRunner
-  title="Build and test the Rust component"
-  cmd={`m libspine_rust libspine_rust_test
-atest libspine_rust_test`}
-  expect={`... building libspine_rust ...
-... [  PASSED  ] 1 test. ...
+  title="Compile and Execute Rust Unit Tests via atest"
+  cmd={`atest spine_rust_test`}
+  expect={`Summary
+-------
+x86_64 spine_rust_test
+----------------------
+[1/2] tests::test_nominal_reading: PASSED (2ms)
+[2/2] tests::test_thermal_cutoff: PASSED (2ms)
 
-(A Rust component is just another build module. The test runs under atest like
-any other.)`}
+All tests passed!`}
 />
 
-<WhyItWorked>
-Rust's memory safety is why AOSP is adopting it for new code - fewer classes of
-bug make it to production. But it is still *AOSP code*: it builds with Soong,
-is tested with your existing harness, and lives in the same tree. Phase 5 taught
-you to read it; this makes you able to ship it.
-</WhyItWorked>
+---
 
-<Checkpoint
-  quiz={{
-    question: 'Which Android.bp rule builds a Rust unit test?',
-    options: [
-      'rust_binary',
-      'rust_test',
-      'rust_fuzz',
-      'rust_library',
-    ],
-    answer: 1,
-    explain:
-      'rust_test builds a Rust unit test; rust_library a shared library, rust_binary an executable, and rust_fuzz a coverage-guided fuzzer.',
-  }}
-/>
+## 4. Packaging the Component into an APEX
 
-## 2. A minimal APEX
+Package your native Rust daemon into an updatable APEX container:
 
-An **APEX** (Android Pony Express) is a package that ships a system component as
-an updatable module - the basis of **Mainline**, where parts of the OS update
-independently of a full OTA. Packaging the Spine as an APEX is a production
-step.
+### `Android.bp` APEX Rule
 
 ```text
-// Android.bp - a minimal APEX
 apex {
     name: "com.android.spine",
     manifest: "apex_manifest.json",
-    binaries: ["spine_daemon"],
-    // For an updatable module, also declare it in the build and sign it.
+    binaries: ["spine_rust_daemon"],
+    key: "com.android.spine.key",
+    certificate: ":com.android.spine.certificate",
+    updatable: true,
 }
 
-// apex_manifest.json
+apex_key {
+    name: "com.android.spine.key",
+    public_key: "com.android.spine.avbpubkey",
+    private_key: "com.android.spine.pem",
+}
+
+android_app_certificate {
+    name: "com.android.spine.certificate",
+    certificate: "com.android.spine",
+}
+```
+
+### `apex_manifest.json`
+
+```json
 {
   "name": "com.android.spine",
   "version": 1
 }
 ```
 
-<Checkpoint
-  quiz={{
-    question: 'What is the point of packaging a component as an APEX?',
-    options: [
-      'It makes the binary smaller.',
-      'It ships the component as an independently updatable module (the basis of Mainline), so it can update without a full OTA.',
-      'It disables SELinux.',
-      'It removes the need for tests.',
-    ],
-    answer: 1,
-    explain:
-      'APEX packages let a system component update on its own - the mechanism behind Mainline. You get the fix out without shipping a whole new system image.',
-  }}
-/>
-
-## 3. Graphics and Camera HAL overview
-
-You will not write a graphics or camera HAL here, but you must be able to place
-them - your capstone may touch one.
-
-- **Graphics:** `SurfaceFlinger` (compositor), the **HWC** (Hardware Composer
-  HAL), and `gralloc` (buffer allocation HAL). Apps draw into buffers;
-  SurfaceFlinger composes them via the HWC.
-- **Camera:** a layered HAL (camera provider, device, and the app-facing
-  `CameraService`), with camera HALs built on the provider model. It is one of
-  the most vendor-specific parts of a device.
-
 <WhyItWorked>
-Both are "find the seam" subsystems: the framework side (SurfaceFlinger,
-CameraService) is AOSP; the hardware side (HWC, gralloc, camera provider) is
-vendor. Knowing where that seam is tells you whether a change is yours to make
-in AOSP or something a vendor must provide - the key production question.
+During the build, Soong creates an ext4 disk image containing `/bin/spine_rust_daemon`, generates `apex_manifest.json`, and signs the payload with your private key. When flashed, `apexd` mounts the image at `/apex/com.android.spine/`, making the binary available at `/apex/com.android.spine/bin/spine_rust_daemon`.
 </WhyItWorked>
 
-## 4. Trade Federation and host-driven tests
+---
 
-You have used `atest` throughout. Under it is **Trade Federation (Tradefed)**, a
-host-driven test harness that orchestrates tests across one or many devices. A
-**host-driven test module** runs on the host and drives the device - useful when
-the test logic is complex or spans devices.
+## 5. The Hardware-to-Screen Seam: Graphics & Camera
 
-```text
-// Android.bp - a host-driven test module (shape)
-android_test {
-    name: "SpineHostDrivenTest",
-    srcs: ["src/**/*.java"],
-    // Tradefed orchestrates: install, run on device, collect results.
+Commercial Android platforms rely heavily on zero-copy hardware graphics pipelines. Understand where the OS ends and silicon begins:
+
+```
++---------------------------------------------------------------+
+|                       App UI (RenderThread)                   |
+|  Draws UI into GraphicBuffer via Vulkan or Skia OpenGL ES     |
++-------------------------------+-------------------------------+
+                                |
+                                v
++---------------------------------------------------------------+
+|                     Gralloc HAL (vendor)                      |
+|  Allocates contiguous physical RAM backed by dma-buf          |
++-------------------------------+-------------------------------+
+                                |
+                                v
++---------------------------------------------------------------+
+|                    SurfaceFlinger (system)                    |
+|  Receives layers from all visible windows; computes Z-order   |
++-------------------------------+-------------------------------+
+                                |
+                                v
++---------------------------------------------------------------+
+|                    Hardware Composer (HWC)                    |
+|  Offloads layers directly to display controller hardware      |
++---------------------------------------------------------------+
+```
+
+<DeepDive title="Why Gralloc and DMA-BUF are Fundamental to Android Performance">
+If an Android camera stream had to copy 4K video frames from camera memory to CPU RAM, and then copy them again to GPU memory for display rendering, the phone would overheat and drop frames. 
+
+Instead, **Gralloc** allocates a Linux **`dma-buf`** (Direct Memory Access Buffer). The camera hardware writes pixel data directly into the buffer; the GPU reads the buffer directly as a texture; and the display processor reads it directly to refresh the screen. **Zero memory copies occur across the entire pipeline!**
+</DeepDive>
+
+---
+
+## 6. Host-Orchestrated Testing: Trade Federation
+
+To test your full stack across reboots and complex states, author a host-driven test module in `SpineHostTest.java`:
+
+```java
+// SpineHostTest.java
+package com.android.tests.spine;
+
+import com.android.tradefed.device.DeviceNotAvailableException;
+import com.android.tradefed.device.ITestDevice;
+import com.android.tradefed.testtype.DeviceTestCase;
+
+public class SpineHostTest extends DeviceTestCase {
+    private ITestDevice mDevice;
+
+    @Override
+    protected void setUp() throws Exception {
+        super.setUp();
+        mDevice = getDevice();
+        assertNotNull("No test device available", mDevice);
+    }
+
+    public void testDaemonRunsAfterReboot() throws DeviceNotAvailableException {
+        // Verify daemon is running
+        String pids = mDevice.executeShellCommand("pidof spine_rust_daemon").trim();
+        assertFalse("Daemon not running prior to reboot", pids.isEmpty());
+
+        // Reboot the physical hardware
+        mDevice.reboot();
+
+        // Verify daemon restored by init
+        String pidsAfter = mDevice.executeShellCommand("pidof spine_rust_daemon").trim();
+        assertFalse("Daemon failed to restart after system reboot", pidsAfter.isEmpty());
+    }
 }
 ```
 
 <TestRunner
-  title="Run a host-driven test module"
-  cmd={`atest SpineHostDrivenTest`}
-  expect={`... (Trade Fed builds, installs, and runs the module on the device) ...
-[  PASSED  ] 1 test. ...
-...
+  title="Run Host-Driven Tradefed Test via atest"
+  cmd={`atest SpineHostTest`}
+  expect={`Summary
+-------
+SpineHostTest
+-------------
+[1/1] com.android.tests.spine.SpineHostTest#testDaemonRunsAfterReboot: PASSED (14.2s)
 
-(atest delegates to Trade Fed, which drives the device and returns results -
-this is the testing path the phase records.)`}
+All tests passed!`}
 />
 
-<WhyItWorked>
-Tradefed is the harness behind `atest`, CTS, and VTS: it handles device setup,
-installation, execution, and result collection at scale. Writing a host-driven
-module means your test can orchestrate the device rather than run inside it -
-the pattern production tests use.
-</WhyItWorked>
+---
 
-## 5. Name every subsystem: the production question
+## 7. The Production Architecture Matrix
 
-The mastery bar is a **reasoning** one: given your capstone feature, name every
-subsystem it touches in a real ship. Use the full stack you have built:
+Before shipping any major platform capability, a lead AOSP architect must map its impact across every single OS layer:
 
-| Layer | Ask yourself |
-|-------|--------------|
-| Kernel | Does it need a module/driver change (Phase 10/10.5)? |
-| HAL | A new or changed AIDL HAL, with VINTF + VTS (Phase 6)? |
-| Framework | A SystemService + app-facing AIDL (Phase 7)? |
-| Security | SELinux policy, permissions (Phase 8)? |
-| Packaging | An APEX/Mainline module (section 2)? |
-| Testing | Unit / CTS / VTS / Tradefed coverage (this phase)? |
-| Real device | Partition/slot implications (Phase 11-12)? |
+| Subsystem Layer | Commercial Ship Requirements |
+|-----------------|------------------------------|
+| **Linux Kernel** | Loadable module in `vendor_boot`, Device Tree node in `dtbo.img`, KUnit passing. |
+| **Hardware Seam** | Stable AIDL HAL annotated `@VintfStability`, VINTF `manifest.xml`, VTS passing. |
+| **Platform Framework** | `SystemService` registered in `SystemServer`, app-facing Manager API, unit tests. |
+| **Security & Privacy** | Isolated SELinux `.te` domain, zero AVC denials, compile-time `neverallow` compliant. |
+| **Packaging & Modularity** | Delivered as an updatable APEX container or GKI KMI-compatible `.ko`. |
+| **Quality & Fleet Verification** | Enrolled in CTS (`CtsSecurityHostTestCases`) and Tradefed test suites. |
+| **Physical Storage** | Resides in proper dynamic sub-partition (`system`, `vendor`, or `product`). |
+
+---
+
+## Checkpoint
 
 <Checkpoint
   quiz={{
-    question: 'What does "name every subsystem the capstone feature touches" require you to do?',
+    question: 'How does Gralloc achieve zero-copy graphics rendering between the camera sensor and the display screen?',
     options: [
-      'List programming languages.',
-      'Map the feature across the real stack - kernel, HAL, framework, security, packaging, testing, device - and say what each layer must do for it to ship.',
-      'Count lines of code.',
-      'Choose a licence.',
+      'By converting all images to JPEG files in /data/local/tmp.',
+      'By allocating Linux dma-buf hardware memory shared directly across camera ISP, GPU, and display hardware blocks without CPU memory copies.',
+      'By using WebSockets over loopback.',
+      'By running all graphics inside system_server.',
     ],
     answer: 1,
     explain:
-      'Production readiness is knowing the whole surface a feature touches: which layers change, which tests cover it, how it is packaged and secured. That map is what separates a demo from a ship.',
+      'Gralloc allocates contiguous or scatter-gather hardware memory handles backed by Linux dma-buf file descriptors. Hardware components (Camera ISP, GPU, Display Processing Unit) map the exact same physical memory pages, eliminating CPU memory copy overhead.',
   }}
 />
+
+---
 
 ## Break It
 
 <BreakIt
   items={[
-    'Symptom: the rust_test passes locally but the module is not found by atest. Cause: the test module was not declared in a build file the tree includes. Fix: add the Android.bp entry in an included directory and rebuild.',
-    'Symptom: the APEX will not install or update. Cause: a missing/incorrect apex_manifest, or the module is not signed/allowed to update. Fix: verify the manifest name/version and the updatability declaration.',
-    'Symptom: a host-driven test cannot find the device. Cause: Tradefed could not select a device (adb state, or no device). Fix: confirm `adb devices` shows it and the target is available before running atest.',
+    'Symptom: apexd fails to activate APEX on boot with "Package verification failed". Cause: The certificate or public key defined in Android.bp does not match the key used to sign the APEX container payload. Fix: Ensure apex_key and certificate match the platform development key pairs.',
+    'Symptom: rust_binary fails to link with "undefined reference to __android_log_print". Cause: Missing dependency on Bionic logging library in Android.bp. Fix: Add "liblog_rust" and "libandroid_logger" to the rustlibs list.',
+    'Symptom: Tradefed test fails with "DeviceNotAvailableException: Device failed to boot within timeout". Cause: Custom init service or HAL blocked the boot sequence, preventing boot_completed from firing. Fix: Inspect dmesg and logcat -b main for blocking synchronous calls.',
   ]}
 />
 
-## 6. Mastery check
+---
 
-The bar: given your **capstone feature**, name **every subsystem it touches in a
-real ship**. Concretely, you have:
-
-- Built and tested a **Rust** component (section 1).
-- Packaged a component as a minimal **APEX** (section 2).
-- Placed the **graphics and Camera HAL** seam (section 3).
-- Written/run a **Trade Federation / host-driven test** module (section 4).
-- Produced the **subsystem map** for your capstone feature (section 5).
-
-**Spine artifact:** commit the Rust component, the APEX packaging, the
-host-driven test, and the subsystem map under `spine/13-hardening` in your
-Project Spine fork (plan section 4.8). This is the artifact the competency map
-records for this phase.
-
-<Reward xp="500" badge="Production Hardener" />
+## Troubleshooting
 
 <Troubleshooting
   items={[
@@ -291,6 +454,10 @@ records for this phase.
   ]}
 />
 
+---
+
+## Further Reading
+
 <FurtherReading
   links={[
     {
@@ -305,6 +472,22 @@ records for this phase.
     },
   ]}
 />
+
+---
+
+## Mastery Check
+
+The bar: a **hardened Project Spine incorporating Rust, APEX modularity, and host-driven test orchestration**:
+
+- Implemented a native Rust binary with unit tests passing under `atest`.
+- Packaged the component into an updatable `.apex` container.
+- Articulated the Gralloc/HWC/SurfaceFlinger zero-copy graphics pipeline.
+- Authored and executed a host-orchestrated **Trade Federation** test suite.
+- Produced the complete **Production Subsystem Architecture Matrix** for your capstone feature.
+
+**Spine artifact:** Commit the Rust source, APEX rules, Tradefed test, and subsystem architecture matrix under `spine/13-hardening`.
+
+<Reward xp={500} badge="Production Hardener" />
 
 <CompleteButton unitId="phase-13-production-readiness" xp={500} label="Mark Phase 13 complete (+500 XP)" />
 

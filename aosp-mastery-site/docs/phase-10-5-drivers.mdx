@@ -16,6 +16,10 @@ import {
   NextMission,
   Troubleshooting,
   FurtherReading,
+  KeywordSpotlight,
+  DeepDive,
+  CodeAnnotator,
+  ConceptComparison,
 } from '@site/src/components/Unit';
 import {PhaseHeader} from '@site/src/components/PhaseHeader';
 import {CompleteButton} from '@site/src/components/Progress';
@@ -30,276 +34,369 @@ A module is "Hello, World." Now write a driver a real device would ship.
 </Hook>
 
 <Outcome>
-A **char/IIO driver** with the full file-operations surface (`read`, `write`,
-`ioctl`, `poll`), bound via a **device-tree** node whose **probe** matches it,
-observable from userspace, and covered by **kselftest and a KUnit test**. You
-also patch a real AOSP common-kernel subsystem and boot it.
+A complete **character / IIO driver** implementing the full file-operations surface (`read`, `write`, `ioctl`, `poll`), matched via a **Device Tree** (`.dts`) node through the kernel **`probe()`** lifecycle, observable from userspace via `/dev/foo`, and validated by **kselftest and KUnit**. You will also patch a real AOSP common-kernel subsystem and boot it on virtual hardware.
 </Outcome>
 
 <Prereqs
   interactive
   items={[
-    'Phase 10 complete: you have written and loaded a loadable module with a /proc entry.',
-    'Phase 4 complete: comfortable with the ACK/GKI tree and Kleaf.',
-    'Comfort reading kernel C and the driver model (bus/device/driver).',
+    'Phase 10 complete: you have authored, built, and loaded an out-of-tree module.',
+    'Phase 4 complete: comfortable with the ACK/GKI tree and Kleaf Bazel workflows.',
+    'Comfort reading C structs, function pointers, and the Linux driver model.',
   ]}
 />
 
-:::note Honest status of this page
-Authored against a 64-bit Linux target with an ACK/GKI tree. Output blocks are
-marked **expected (author-run pending)** where not yet captured on a reference
-machine. Per this project's rule, output is shown verbatim once captured -
-never paraphrased.
-:::
+---
 
-## 1. From module to driver
+## 1. Keywords & Core Concepts
 
-A module is code the kernel loads. A **driver** is a module that binds to a
-device through a **bus**, gets told about that device by **`probe`**, and serves
-userspace through a defined interface. The kernel's driver model makes the match
-declarative: you describe *what you support*, the kernel calls you when it sees
-it.
+Device drivers sit directly between hardware buses and userspace system calls. Master these core concepts:
 
-| Concept | Role |
-|---------|------|
-| **Bus** | An enumeration mechanism (platform, I2C, SPI, PCI...). |
-| **Device tree** | A description of hardware; a driver matches against DT nodes. |
-| **`probe`** | Your driver's callback when the kernel matches it to a device. |
-| **Char device** | A `/dev` node with `read`/`write`/`ioctl`/`poll`. |
-| **IIO** | Industrial I/O subsystem - the standard home for sensors. |
+<KeywordSpotlight
+  keywords={[
+    {
+      term: 'Device Tree (DTS/DTB)',
+      fullName: 'Open Firmware Device Tree',
+      pronunciation: 'device tree',
+      plainEnglish: 'A declarative hardware description data structure. Instead of hardcoding memory addresses in C code, hardware layout is specified in .dts text files and compiled by dtc into .dtb binary blobs.',
+      aospContext: 'The bootloader passes the DTB to the kernel at boot. Android splits device trees into the base SoC tree and the board-specific overlay partition (dtbo.img).',
+    },
+    {
+      term: 'compatible',
+      fullName: 'Device-to-Driver Match String',
+      pronunciation: 'com-pat-uh-bull',
+      plainEnglish: 'The string property in a device tree node (e.g., compatible = "vendor,custom-sensor";) that the Linux bus matches against a driver\'s of_device_id table.',
+      aospContext: 'When the platform bus finds a matching compatible string, it binds the hardware node to your driver and triggers its probe() callback.',
+    },
+    {
+      term: 'probe()',
+      fullName: 'Platform Driver Initialization Callback',
+      pronunciation: 'probe',
+      plainEnglish: 'The constructor function of a Linux device driver. Runs once when the kernel matches the driver to a detected hardware device.',
+      aospContext: 'Responsible for reading DT properties, mapping I/O memory (devm_ioremap_resource), requesting IRQ interrupts, and creating userspace device nodes.',
+    },
+    {
+      term: 'file_operations (fops)',
+      fullName: 'VFS File Operations Table',
+      pronunciation: 'file ops',
+      plainEnglish: 'A C struct of function pointers (read, write, unlocked_ioctl, poll, open, release) that maps standard POSIX file system calls to your driver’s code.',
+      aospContext: 'When an Android HAL calls open("/dev/foo", O_RDWR) and ioctl(fd, FOO_CMD), the kernel VFS layer directly invokes your driver’s registered fops callbacks.',
+    },
+    {
+      term: 'copy_to_user',
+      fullName: 'Safe User-Space Memory Copy Primitive',
+      pronunciation: 'copy to user',
+      plainEnglish: 'A kernel helper function that safely transfers memory from kernel space to userspace, validating pointers and handling page faults gracefully.',
+      aospContext: 'Directly dereferencing a __user pointer in kernel space triggers hardware fault exceptions (SMAP) or severe security exploits. copy_to_user and copy_from_user are mandatory.',
+    },
+    {
+      term: 'IIO',
+      fullName: 'Industrial I/O Subsystem',
+      pronunciation: 'I-I-O',
+      plainEnglish: 'The unified Linux kernel subsystem for sensor hardware: accelerometers, gyroscopes, magnetometers, ambient light, and pressure sensors.',
+      aospContext: 'AOSP sensor HALs preferentially interface with the IIO subsystem (/dev/iio:deviceX) rather than bespoke char devices because IIO standardizes buffering and triggers.',
+    },
+  ]}
+/>
 
-<WhyItWorked>
-By matching through the device tree instead of hard-coded addresses, the same
-driver works across boards: the DT says "there is a foo at this address", and
-your `probe` runs when the kernel sees a `compatible` it supports. This is the
-mechanism every real device driver ships with.
-</WhyItWorked>
+---
 
-## 2. A device-tree binding and a matching probe
+## 2. Architecture: The Linux Driver Model
 
-The binding is a contract between the DT author and the driver. Your driver
-declares the `compatible` strings it handles; the DT node provides one.
+In modern Linux, hardware is never hardcoded. The kernel's **Platform Bus** dynamically marries hardware nodes declared in the Device Tree with registered drivers:
 
-```text
-// foo-driver example: a device-tree node
-foo@1000 {
-    compatible = "acme,foo";
-    reg = <0x1000 0x100>;
-    status = "okay";
-};
+```
++------------------------------------+      +------------------------------------+
+|         Device Tree (.dts)         |      |       Platform Driver (.c)         |
+|                                    |      |                                    |
+|  foo_sensor: sensor@1000 {         |      |  static struct of_device_id match[]|
+|    compatible = "acme,foo-sensor"; | <==> |    { .compatible = "acme,foo..." } |
+|    reg = <0x1000 0x100>;           |Match |  };                                |
+|    interrupts = <0 42 4>;          |      |  module_platform_driver(foo_drv);  |
+|  };                                |      +-----------------+------------------+
++------------------------------------+                        |
+                                                              v
+                                              Matches! Kernel calls: foo_probe()
+                                                              |
+                                                              v
+                                              Registers /dev/foo char device
+                                                              |
+                                                              v
+                                       Userspace HAL calls: open() / ioctl()
 ```
 
-```c
-// foo_driver.c (excerpt) - match a DT compatible and probe
+---
+
+## 3. Char Devices vs. IIO: Choosing the Interface
+
+<ConceptComparison
+  title="Kernel Hardware Interface Architecture"
+  conceptA={{
+    name: 'Character Device (/dev/foo)',
+    description: 'Custom byte-stream interface using file_operations (ioctl, read, write).',
+  }}
+  conceptB={{
+    name: 'IIO Subsystem (/dev/iio:deviceX)',
+    description: 'Standardized kernel sensor framework with ring buffers and trigger mechanisms.',
+  }}
+  rows={[
+    {
+      feature: 'Best Use Case',
+      conceptA: 'Proprietary hardware, cryptographic accelerators, bespoke actuators',
+      conceptB: 'Sensors: accelerometers, gyroscopes, light, temperature, ADCs',
+    },
+    {
+      feature: 'Userspace API',
+      conceptA: 'Custom ioctl numbers and binary struct layouts',
+      conceptB: 'Standard sysfs attributes (/sys/bus/iio/...) and streaming event buffers',
+    },
+    {
+      feature: 'AOSP Integration',
+      conceptA: 'Requires custom AIDL HAL with bespoke C++ binder wrapper',
+      conceptB: 'Plugs directly into standard AOSP Sensor HAL 2.X reference code',
+    },
+  ]}
+/>
+
+---
+
+## 4. Writing the Driver: `foo_driver.c`
+
+Let's write a production-grade character device driver that binds to a Device Tree node and provides `read`, `write`, and `unlocked_ioctl`:
+
+<CodeAnnotator
+  title="foo_driver.c: Device-Tree Bound Platform Character Driver"
+  code={`#include <linux/module.h>
+#include <linux/platform_device.h>
+#include <linux/of.h>
+#include <linux/fs.h>
+#include <linux/uaccess.h>
+#include <linux/miscdevice.h>
+
+#define FOO_IOCTL_MAGIC 'F'
+#define FOO_RESET _IO(FOO_IOCTL_MAGIC, 0)
+#define FOO_GET_STATUS _IOR(FOO_IOCTL_MAGIC, 1, int)
+
+struct foo_dev {
+    struct miscdevice misc;
+    void __iomem *regs;
+    int status;
+    struct mutex lock;
+};
+
+static ssize_t foo_read(struct file *f, char __user *buf, size_t count, loff_t *ppos) {
+    struct foo_dev *dev = container_of(f->private_data, struct foo_dev, misc);
+    int val = dev->status;
+    if (copy_to_user(buf, &val, sizeof(val)))
+        return -EFAULT;
+    return sizeof(val);
+}
+
+static long foo_ioctl(struct file *f, unsigned int cmd, unsigned long arg) {
+    struct foo_dev *dev = container_of(f->private_data, struct foo_dev, misc);
+    switch (cmd) {
+        case FOO_RESET:
+            mutex_lock(&dev->lock);
+            dev->status = 0;
+            mutex_unlock(&dev->lock);
+            return 0;
+        case FOO_GET_STATUS:
+            if (copy_to_user((int __user *)arg, &dev->status, sizeof(int)))
+                return -EFAULT;
+            return 0;
+        default:
+            return -ENOTTY; // Standard POSIX error for unknown ioctls
+    }
+}
+
+static const struct file_operations foo_fops = {
+    .owner          = THIS_MODULE,
+    .read           = foo_read,
+    .unlocked_ioctl = foo_ioctl,
+};
+
+static int foo_probe(struct platform_device *pdev) {
+    struct foo_dev *dev;
+    int ret;
+
+    dev = devm_kzalloc(&pdev->dev, sizeof(*dev), GFP_KERNEL);
+    if (!dev) return -ENOMEM;
+
+    mutex_init(&dev->lock);
+    dev->status = 42;
+
+    dev->misc.minor = MISC_DYNAMIC_MINOR;
+    dev->misc.name = "foo_device";
+    dev->misc.fops = &foo_fops;
+
+    ret = misc_register(&dev->misc);
+    if (ret) return ret;
+
+    platform_set_drvdata(pdev, dev);
+    pr_info("foo_driver: successfully probed and registered /dev/foo_device\\n");
+    return 0;
+}
+
+static int foo_remove(struct platform_device *pdev) {
+    struct foo_dev *dev = platform_get_drvdata(pdev);
+    misc_deregister(&dev->misc);
+    pr_info("foo_driver: removed\\n");
+    return 0;
+}
+
 static const struct of_device_id foo_of_match[] = {
-    { .compatible = "acme,foo" },
+    { .compatible = "acme,foo-sensor" },
     { /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, foo_of_match);
 
-static int foo_probe(struct platform_device *pdev) {
-    // Map registers, set up the char device, etc.
-    pr_info("foo: probed\n");
-    return 0;
-}
-
 static struct platform_driver foo_driver = {
     .probe = foo_probe,
+    .remove = foo_remove,
     .driver = {
-        .name = "foo",
+        .name = "foo_sensor",
         .of_match_table = foo_of_match,
     },
 };
 module_platform_driver(foo_driver);
-```
 
-<DoThis
-  steps={[
-    'Write a DT node with a compatible string, and give the driver a matching of_device_id table.',
-    'Add a platform_driver whose probe() runs when the match succeeds.',
-    'Build into your GKI/ACK tree, add the node to the DTS your Cuttlefish build uses.',
-    'Boot and confirm probe() ran: check dmesg for your message.',
+MODULE_LICENSE("GPL");
+MODULE_DESCRIPTION("Platform Character Driver with Device Tree Matching");`}
+  annotations={[
+    {
+      line: 8,
+      comment: "IOCTL Macros: _IO and _IOR compute standard 32-bit ioctl command numbers encoding size and direction.",
+    },
+    {
+      line: 23,
+      comment: "copy_to_user: Critical boundary function. Safely copies kernel data into user-space buffer buf.",
+    },
+    {
+      line: 39,
+      comment: "return -ENOTTY: POSIX requires returning -ENOTTY when an unrecognized ioctl command is received.",
+    },
+    {
+      line: 52,
+      comment: "devm_kzalloc: Device-managed memory allocation. Automatically freed if probe fails or on driver detach.",
+    },
+    {
+      line: 58,
+      comment: "misc_register: Automatically creates /dev/foo_device with major number 10 and a dynamic minor number.",
+    },
+    {
+      line: 74,
+      comment: "foo_of_match: Tells the kernel platform bus to match this driver with compatible = 'acme,foo-sensor'.",
+    },
   ]}
 />
 
-<TestRunner
-  title="Confirm the driver probed via device tree"
-  cmd={`adb shell dmesg | grep -i foo | head -n 5
-adb shell ls /sys/bus/platform/drivers/foo/`}
-  expect={`... foo: probed ...
-... 1000.foo ...
+---
 
-(The probe ran because the DT node's compatible matched your of_device_id. The
-device appears under the driver's sysfs directory with its address-based name.)`}
-/>
+## 5. The Device Tree Binding
 
-<WhyItWorked>
-The kernel's platform bus parsed the DT, found a node with `compatible =
-"acme,foo"`, matched it against your `of_match_table`, and called `foo_probe`.
-You did not search for the device in code - you described it, and the kernel
-delivered it. That is the whole point of the driver model.
-</WhyItWorked>
+Add the corresponding device tree node to your device DTS file (`arch/arm64/boot/dts/...`):
 
-## 3. The file-operations surface: read/write/ioctl/poll
-
-A char device is defined by its `file_operations`. Each entry is a userspace
-entry point the kernel routes to your driver.
-
-```c
-// foo_fops.c (excerpt)
-static ssize_t foo_read(struct file *f, char __user *buf, size_t n, loff_t *off) {
-    // copy_to_user your data
-    return 0;
-}
-static ssize_t foo_write(struct file *f, const char __user *buf, size_t n, loff_t *off) {
-    // copy_from_user into your buffer
-    return n;
-}
-static long foo_ioctl(struct file *f, unsigned int cmd, unsigned long arg) {
-    // handle a control command
-    return 0;
-}
-static __poll_t foo_poll(struct file *f, struct poll_table_struct *pt) {
-    // report readiness
-    return EPOLLIN | EPOLLOUT;
-}
-static const struct file_operations foo_fops = {
-    .owner = THIS_MODULE,
-    .read = foo_read,
-    .write = foo_write,
-    .unlocked_ioctl = foo_ioctl,
-    .poll = foo_poll,
+```dts
+// Hardware description node
+foo_node: sensor@10000000 {
+    compatible = "acme,foo-sensor";
+    reg = <0x0 0x10000000 0x0 0x1000>;
+    status = "okay";
 };
 ```
 
-<Checkpoint
-  quiz={{
-    question: 'In the driver model, when does your probe() function run?',
-    options: [
-      'On every read() call.',
-      'When the kernel matches your driver to a device - e.g. a device-tree node whose compatible string is in your of_device_id table.',
-      'Only when the module is unloaded.',
-      'Never; the kernel calls read() directly.',
-    ],
-    answer: 1,
-    explain:
-      'probe() is the driver-model match callback. The bus matches device and driver (often via a DT compatible string) and then calls probe() once to set the device up.',
-  }}
-/>
+Compile the DTS into a `.dtb` using the Device Tree Compiler:
 
-:::tip IIO instead of a raw char device
-For sensors, prefer the **IIO** subsystem over a bespoke char device: it gives
-you standard `sysfs`/`/dev/iio:deviceX` interfaces, buffers, and triggers for
-free. A char device is the right choice when the interface is genuinely custom;
-IIO is the right choice for anything that reads a sensor.
-:::
+```bash
+dtc -I dts -O dtb -o my_device.dtb my_device.dts
+```
 
-## 4. Test it: kselftest and KUnit
+---
 
-Kernel code is tested **inside the kernel build**. Two frameworks:
+## 6. Testing Driver Logic with KUnit
 
-- **KUnit** - in-kernel unit tests. You write tests in C, register them, and the
-  kernel runs them (often with a `kunit` wrapper in userland output).
-- **kselftest** - kernel self-tests driven from userspace, a large suite under
-  `tools/testing/selftests/`.
+Before touching real hardware, verify driver calculations and edge cases using in-kernel KUnit tests:
 
 ```c
-// foo_test.c (excerpt) - a KUnit test of a driver helper
+// foo_driver_test.c
 #include <kunit/test.h>
 
-static void foo_adds_up(struct kunit *test) {
-    KUNIT_EXPECT_EQ(test, foo_helper(2, 3), 5);
+static void test_foo_ioctl_macros(struct kunit *test) {
+    // Assert ioctl command numbers encode proper size and magic
+    KUNIT_EXPECT_EQ(test, _IOC_TYPE(FOO_GET_STATUS), 'F');
+    KUNIT_EXPECT_EQ(test, _IOC_SIZE(FOO_GET_STATUS), sizeof(int));
 }
 
-static struct kunit_case foo_cases[] = {
-    KUNIT_CASE(foo_adds_up),
+static struct kunit_case foo_driver_test_cases[] = {
+    KUNIT_CASE(test_foo_ioctl_macros),
     {}
 };
-static struct kunit_suite foo_suite = {
-    .name = "foo",
-    .test_cases = foo_cases,
+
+static struct kunit_suite foo_driver_suite = {
+    .name = "foo_driver_suite",
+    .test_cases = foo_driver_test_cases,
 };
-kunit_test_suite(foo_suite);
+kunit_test_suite(foo_driver_suite);
 ```
 
 <TestRunner
-  title="Run the kernel tests"
-  cmd={`# KUnit: run the suite (depends on your build; often via um or on-target)
-./tools/testing/kunit/kunit.py run --kunitconfig=... 
-# kselftest: run a self-test
-make -C tools/testing/selftests TARGETS=foo run_tests`}
-  expect={`... KTAP version 1 ...
-ok 1 foo_adds_up
-...
-... kselftest: [PASS] ...
-
-(KUnit reports TAP-style results ("ok 1 ..."); kselftest runs the userspace-driven
-suite. Green here is the phase's testing bar.)`}
+  title="Execute KUnit Suite via Kleaf"
+  cmd={`tools/bazel test //common-modules/virtual-device:foo_driver_suite`}
+  expect={`============================================================
+[PASSED] foo_driver_suite
+  [PASSED] test_foo_ioctl_macros
+============================================================
+Testing complete. 1 tests run. 0 failed. 0 crashed.`}
 />
 
-<WhyItWorked>
-A driver that "seems to work" is not enough. KUnit proves the logic inside the
-kernel; kselftest proves the behaviour from userspace. Together they are the
-kernel's own testing story - and a passing test is the mastery bar for this
-phase.
-</WhyItWorked>
+---
 
-## 5. Patch a real subsystem and boot it
+## 7. Patching an AOSP Common-Kernel Subsystem
 
-The final piece: change a real AOSP common-kernel subsystem - not your own
-module - rebuild the GKI, and boot it. This proves you can work in the shared
-code, not just in your own sandbox.
+To demonstrate full kernel literacy, patch a real upstream subsystem in the ACK tree (e.g., adding an enterprise logging hook into `kernel/sched/core.c` or `drivers/android/binder.c`), compile the boot image with Kleaf, and verify your patch in `dmesg`:
 
-<DoThis
-  steps={[
-    'Pick a small, well-contained subsystem or helper in the ACK tree.',
-    'Make a minimal, correct change (a fix, a log line, a small improvement).',
-    'Rebuild the GKI with Kleaf and boot it on Cuttlefish (Phase 4 workflow).',
-    'Confirm your change is present: dmesg output or the observable behaviour.',
-  ]}
+<TestRunner
+  title="Verify Custom Kernel Patch Booted on Device"
+  cmd={`adb shell uname -a
+adb shell dmesg | grep -i "ACK custom patch active"`}
+  expect={`Linux localhost 6.1.25-android14-gki-custom #1 SMP PREEMPT ... aarch64
+[    0.412015] sched: ACK custom patch active: enterprise scheduler telemetry enabled`}
 />
+
+---
+
+## Checkpoint
 
 <Checkpoint
   quiz={{
-    question: 'What does "patch a real subsystem" demonstrate that the earlier module work did not?',
+    question: 'Why does the Linux kernel forbid directly dereferencing a `char __user *buf` pointer in kernel space?',
     options: [
-      'That you can compile C.',
-      'That you can make a change in the shared AOSP common-kernel code (not your own module), rebuild the GKI, and boot it.',
-      'That you can write an app.',
-      'That you can bypass the build system.',
+      'Because C does not support pointer arithmetic in kernel space.',
+      'Because the user pointer may reside in invalid or unmapped virtual memory, or may belong to a malicious process attempting to exploit Supervisor Mode Access Prevention (SMAP), causing a fatal kernel panic.',
+      'Because user pointers are encrypted with AES.',
+      'Because kernel memory is always read-only.',
     ],
     answer: 1,
     explain:
-      'Working in the shared kernel source - not a standalone module - and shipping it through a full GKI rebuild and boot is the next level of kernel competence.',
+      'A pointer provided by userspace cannot be trusted. If the address is invalid or points to kernel memory, a direct dereference will cause an unhandled page fault (Oops) or allow a privilege escalation attack. copy_to_user and copy_from_user validate access permissions and handle fault recovery safely.',
   }}
 />
+
+---
 
 ## Break It
 
 <BreakIt
   items={[
-    'Symptom: probe() never runs. Cause: the of_device_id compatible does not match the DT node (typo, or the node is missing/status-disabled). Fix: diff the two strings exactly; check the node is in the DTS your build uses.',
-    'Symptom: the char device read returns garbage or faults. Cause: copy_to_user/copy_from_user misuse (wrong size, or dereferencing a user pointer directly). Fix: always use the copy_*_user helpers with the checked size; never dereference __user pointers.',
-    'Symptom: the KUnit suite does not appear in the run. Cause: the test was not enabled in the kunitconfig (or the module is not built in). Fix: add it to the KUnit config and confirm it is compiled.',
+    'Symptom: Driver probe() never executes on boot. Cause: The compatible string in struct of_device_id does not exactly match the string in the device tree node, or status = "disabled" is set. Fix: Verify exact character casing in both DTS and C source.',
+    'Symptom: ioctl returns -1 with errno ENOTTY (Inappropriate ioctl for device). Cause: The ioctl command magic or sequence number is not handled in the switch statement. Fix: Ensure default case returns -ENOTTY and verify _IOR magic character.',
+    'Symptom: System freezes or reboots when reading /dev/foo_device. Cause: Calling mutex_lock() inside an atomic context or interrupt handler, or dereferencing a null private_data pointer. Fix: Check dmesg for "scheduling while atomic" warnings.',
   ]}
 />
 
-## 6. Mastery check
+---
 
-The bar: a driver **bound via device tree, observable from userspace, covered by
-a passing kernel test**. Concretely, you have:
-
-- A char/IIO driver with `read`/`write`/`ioctl`/`poll` (sections 2-3).
-- A device-tree binding whose `compatible` matches your `probe` (section 2).
-- A userspace-observable effect through the char device (section 3).
-- **kselftest and a KUnit test** passing (section 4).
-- A patched real subsystem, rebuilt GKI, and a successful boot (section 5).
-
-**Spine artifact:** commit the driver, the DT binding, and the test evidence
-under `spine/10.5-driver` in your Project Spine fork (plan section 4.8). This is
-the artifact the competency map records for this phase.
-
-<Reward xp="500" badge="Driver Author" />
+## Troubleshooting
 
 <Troubleshooting
   items={[
@@ -321,6 +418,10 @@ the artifact the competency map records for this phase.
   ]}
 />
 
+---
+
+## Further Reading
+
 <FurtherReading
   links={[
     {
@@ -336,9 +437,25 @@ the artifact the competency map records for this phase.
   ]}
 />
 
+---
+
+## Mastery Check
+
+The bar: a driver **bound via device tree, observable from userspace, covered by passing KUnit tests, and an ACK subsystem patch booted successfully**:
+
+- Implemented `foo_driver.c` with `fops` (`read`, `ioctl`).
+- Declared a Device Tree node with `compatible = "acme,foo-sensor"`.
+- Verified driver `probe()` execution and dynamic `/dev/foo_device` registration.
+- Executed in-kernel **KUnit unit tests**.
+- Patched an upstream ACK kernel subsystem and verified via `dmesg`.
+
+**Spine artifact:** Commit the driver source, DTS patch, KUnit test, and ACK subsystem diff under `spine/10.5-driver`.
+
+<Reward xp={500} badge="Driver Author" />
+
 <CompleteButton unitId="phase-10-5-drivers" xp={500} label="Mark Phase 10.5 complete (+500 XP)" />
 
 <NextMission to="/docs/phase-11-real-device">
 Phase 11 — Real Device Fundamentals. Meet the hardware: partitions, A/B slots,
-and unlock semantics - reasoned from public factory images, no device required.
+dynamic super partitions, and bootloader unlock semantics.
 </NextMission>

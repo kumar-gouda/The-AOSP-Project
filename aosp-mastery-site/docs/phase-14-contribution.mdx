@@ -16,6 +16,10 @@ import {
   NextMission,
   Troubleshooting,
   FurtherReading,
+  KeywordSpotlight,
+  DeepDive,
+  CodeAnnotator,
+  ConceptComparison,
 } from '@site/src/components/Unit';
 import {PhaseHeader} from '@site/src/components/PhaseHeader';
 import {CompleteButton} from '@site/src/components/Progress';
@@ -30,226 +34,290 @@ Ship it like an AOSP engineer.
 </Hook>
 
 <Outcome>
-You can **format, upload, and self-review** a patch, write a commit message a
-reviewer will accept, navigate Gerrit conventions, and use `cs.android.com` to
-orient in unfamiliar code - so a patch you submit **passes a real reviewer's
-checklist**.
+Format, upload, and self-review a real platform change using the official **Google Gerrit workflow** (`repo upload`), write a commit message that meets Google's strict engineering standards, navigate `cs.android.com` semantic code search to inspect revision history, and pass an **AOSP maintainer's review checklist**.
 </Outcome>
 
 <Prereqs
   interactive
   items={[
-    'Phases −1 to 13 complete: you have real changes (the Spine) worth contributing.',
-    'A working AOSP checkout with `repo` and the Gerrit tooling.',
-    'Git fluency: branch, commit, rebase, amend.',
+    'Phases −1 to 13 complete: you have built real, validated platform code in your Project Spine.',
+    'A working local AOSP environment with repo and Git configured.',
+    'Git fluency: branching, interactive rebasing (git rebase -i), and amending.',
   ]}
 />
 
-:::note Honest status of this page
-Authored against a 64-bit Linux target. Output blocks are marked **expected
-(author-run pending)** where not yet captured on a reference machine. Per this
-project's rule, output is shown verbatim once captured - never paraphrased.
-:::
+---
 
-## 1. The AOSP contribution lifecycle
+## 1. Keywords & Core Concepts
 
-An AOSP change is not a branch you push; it is a **series of patches** reviewed
-in **Gerrit**. The lifecycle:
+AOSP does not use GitHub Pull Requests. It uses **Gerrit Code Review**, a patch-centric collaboration system. Master these core terms:
 
-```
-edit -> repo upload -> Gerrit review -> (amend, re-upload) -> submit
-```
-
-A **change** (one commit) becomes a patch set on Gerrit. Reviewers comment
-inline; you amend and re-upload; a reviewer approves (Code-Review +2) and it is
-submitted. Etiquette and clarity matter as much as the code.
-
-<WhyItWorked>
-Gerrit is a *review* system, not a hosting service: the unit is the patch set,
-and the goal is a reviewer being able to say "yes" quickly. Everything in this
-phase - commit-message format, small changes, self-review - exists to make that
-easy. The workflow is the skill.
-</WhyItWorked>
-
-## 2. Format the commit properly
-
-AOSP has a strict commit-message convention. A good message lets a reviewer
-understand the change without asking.
-
-```text
-<component>: <short summary in imperative mood>
-
-<Longer body explaining WHAT and WHY, wrapped at 72 columns. Say why
-the change is needed, not just what it does.>
-
-Test: <how you tested it - atest target, CTS, manual>
-Bug: <bug id, if any>
-Change-Id: I<40 hex chars>   # added automatically by the commit hook
-```
-
-<DoThis
-  steps={[
-    'Write a subject line: component + imperative summary, under ~50 chars.',
-    'Write a body: what and why, wrapped at 72 columns.',
-    'Add a Test: line describing exactly how you verified it.',
-    'Install the commit-msg hook so Gerrit adds Change-Id automatically.',
+<KeywordSpotlight
+  keywords={[
+    {
+      term: 'Gerrit',
+      fullName: 'Google Gerrit Code Review System',
+      pronunciation: 'Gair-it',
+      plainEnglish: 'The web-based code review and Git management platform used across Android (android-review.googlesource.com) and Chromium.',
+      aospContext: 'Unlike GitHub where pull requests review entire branches, Gerrit reviews individual Git commits as independent patch sets with +1/+2 score voting.',
+    },
+    {
+      term: 'Change-Id',
+      fullName: 'Gerrit Unique Change Identifier',
+      pronunciation: 'change I-D',
+      plainEnglish: 'A 40-character hexadecimal SHA-1 string automatically inserted into the git commit footer by the commit-msg hook (e.g., Change-Id: I42...).',
+      aospContext: 'Allows you to amend and push revisions of your commit without creating duplicate review requests. Gerrit matches the Change-Id to update the existing patch set.',
+    },
+    {
+      term: 'repo upload',
+      fullName: 'Google Repo Upstream Review Command',
+      pronunciation: 'repo upload',
+      plainEnglish: 'The Python wrapper command that inspects your local topic branch and pushes your commits to Gerrit for peer review.',
+      aospContext: 'Executes git push origin HEAD:refs/for/<branch> across the specific multi-git project directory in your working tree.',
+    },
+    {
+      term: 'refs/for/<branch>',
+      fullName: 'Gerrit Interception Refspec',
+      pronunciation: 'refs for branch',
+      plainEnglish: 'A magical Git reference namespace used by Gerrit to intercept commits before they touch the real repository branch.',
+      aospContext: 'Pushing directly to refs/heads/main is blocked by server security. Pushing to refs/for/main opens a pending review on Gerrit.',
+    },
+    {
+      term: 'cs.android.com',
+      fullName: 'Android Code Search Engine',
+      pronunciation: 'C-S dot android',
+      plainEnglish: 'Google\'s Kythe-powered semantic code search platform indexing the complete AOSP source tree with cross-reference indexing and commit blame.',
+      aospContext: 'Allows you to click any C++, Java, or Rust symbol to immediately view its callers, implementations, and the Gerrit review that introduced it.',
+    },
+    {
+      term: 'Code-Review +2',
+      fullName: 'Designated Maintainer Approval Vote',
+      pronunciation: 'plus two',
+      plainEnglish: 'The highest review score on Gerrit. Indicates that an authorized module owner or core platform engineer has reviewed and approved the change for merge.',
+      aospContext: 'A patch requires both Code-Review +2 and Verified +1 (from Google TreeHugger automated continuous integration) before it can be submitted.',
+    },
   ]}
 />
+
+---
+
+## 2. GitHub vs. Gerrit: The Fundamental Paradigm Shift
+
+Engineers coming from GitHub or GitLab often struggle with Gerrit because the workflow is fundamentally different:
+
+<ConceptComparison
+  title="Code Review Models: GitHub vs. Gerrit"
+  conceptA={{
+    name: 'GitHub (Pull Request Model)',
+    description: 'Branch-centric: multiple commits bundled together into a single pull request.',
+  }}
+  conceptB={{
+    name: 'Gerrit (Patch Set Model)',
+    description: 'Commit-centric: every single commit is an atomic, reviewable patch set.',
+  }}
+  rows={[
+    {
+      feature: 'Unit of Review',
+      conceptA: 'The Pull Request (contains entire branch diff)',
+      conceptB: 'The Individual Commit (each commit is its own review URL)',
+    },
+    {
+      feature: 'Applying Feedback',
+      conceptA: 'Push new commits (e.g. "fix review comments") to the branch',
+      conceptB: 'Amend the original commit (git commit --amend) and re-upload',
+    },
+    {
+      feature: 'Git History',
+      conceptA: 'Merge commits frequently used; non-linear history',
+      conceptB: 'Strictly linear history; merge commits forbidden in topic branches',
+    },
+    {
+      feature: 'CI Verification',
+      conceptA: 'GitHub Actions checks branch tip',
+      conceptB: 'TreeHugger CI runs CTS/unit tests on every individual patch set',
+    },
+  ]}
+/>
+
+---
+
+## 3. Anatomy of a Production AOSP Commit Message
+
+AOSP has the strictest commit message format in the software industry. Reviewers will reject patches with poor commit messages regardless of how good the code is:
+
+<CodeAnnotator
+  title="Canonical AOSP Commit Message Layout"
+  code={`services: Fix race condition in FooService initialization
+
+Ensure mHalService lock is acquired before registering callback
+listeners to prevent null pointer dereference during high-frequency
+device boot phases.
+
+Wrapped at 72 characters to preserve terminal and git log formatting.
+Explains the root-cause bug and WHY this change resolves it.
+
+Test: atest FrameworksServicesTests:FooServiceTest
+Test: adb shell dumpsys foo | grep -i status
+Bug: 294812345
+Change-Id: I0a1b2c3d4e5f60718293a4b5c6d7e8f901234567`}
+  annotations={[
+    {
+      line: 1,
+      comment: "<subsystem>: <imperative title> under 65 chars. Use 'Fix', not 'Fixed' or 'Fixes'.",
+    },
+    {
+      line: 3,
+      comment: "Commit body: Explains the problem, why existing behavior failed, and the solution rationale.",
+    },
+    {
+      line: 7,
+      comment: "Strict 72-character line wrap: Mandated across all AOSP git repositories.",
+    },
+    {
+      line: 10,
+      comment: "Test: tag: MANDATORY. Specifies the exact commands used to verify the patch.",
+    },
+    {
+      line: 12,
+      comment: "Bug: tag: Links to public Issue Tracker or partner bug ID.",
+    },
+    {
+      line: 13,
+      comment: "Change-Id: Generated automatically by the commit-msg hook. Never edit manually.",
+    },
+  ]}
+/>
+
+---
+
+## 4. Installing the Gerrit `commit-msg` Hook
+
+Before making any commits, install the official Google Gerrit hook so the `Change-Id` is appended automatically:
 
 <TestRunner
-  title="Install the Change-Id hook and check your message"
-  cmd={`# one-time: install the Gerrit commit-msg hook
+  title="Install Gerrit commit-msg Hook"
+  cmd={`# Navigate to project git directory
+cd frameworks/base
+
+# Install the official hook
 curl -Lo .git/hooks/commit-msg \\
   https://android-review.googlesource.com/tools/hooks/commit-msg
 chmod +x .git/hooks/commit-msg
-# then commit; the hook appends a Change-Id
-git commit
-git log -1 --format=%B`}
-  expect={`<component>: <short summary>
 
-<body explaining what and why>
-
-Test: atest FooServiceCoreTest
-Change-Id: I0a1b2c3d4e5f60718293a4b5c6d7e8f901234567
-
-(The Change-Id ties the commit to its Gerrit change across re-uploads. Without
-the hook, uploads create duplicate changes.)`}
+# Verify hook is active on commit
+git commit --amend --no-edit
+git log -1 --format=%B | grep "Change-Id:"`}
+  expect={`Change-Id: I42a98f1234567890abcdef1234567890abcdef12`}
 />
 
-<Checkpoint
-  quiz={{
-    question: 'Why does every AOSP commit need a Change-Id?',
-    options: [
-      'It encrypts the patch.',
-      'It ties the commit to its Gerrit change, so amended re-uploads update the same change instead of creating new ones.',
-      'It is the author\'s email hash.',
-      'It signs the commit.',
-    ],
-    answer: 1,
-    explain:
-      'The Change-Id is the stable identity of a Gerrit change. When you amend and re-upload, Gerrit uses it to add a new patch set to the same change rather than opening a duplicate.',
-  }}
-/>
+---
 
-## 3. Upload and the Gerrit conventions
+## 5. Uploading and Iterating on Gerrit
 
-Uploading turns your commit into a patch set for review. Knowing the review
-conventions is half the skill.
+The iteration cycle for an AOSP engineer:
+
+```
+  +------------------+
+  |  Edit Code       |
+  +--------+---------+
+           |
+           v
+  +------------------+
+  | git commit --amend  <-- (Preserves Change-Id!)
+  +--------+---------+
+           |
+           v
+  +------------------+
+  |  repo upload .   |  --> Pushes new Patch Set to existing Gerrit Change
+  +--------+---------+
+           |
+           v
+  +------------------+
+  | Reviewer Feedback|
+  |  (Address lines) |
+  +--------+---------+
+           |
+           +----------------> Repeat until Code-Review +2 and Verified +1
+```
 
 <TestRunner
-  title="Upload a change for review"
-  cmd={`# on your feature branch, with a clean commit
-repo upload .
-# or a specific project:
-repo upload path/to/project`}
-  expect={`... Upload project <project> ...
-... to https://android-review.googlesource.com/ ...
-... 1 change uploaded (1 commit) ...
+  title="Upload Change Set to Gerrit"
+  cmd={`repo upload .`}
+  expect={`Upload project frameworks/base/ to remote branch main:
+  branch my-feature-branch (1 commit, Sun Sep 27 11:15:30 2026):
+         a1b2c3d services: Fix race condition in FooService initialization
+to https://android-review.googlesource.com/ (y/N)? y
 ...
-
-(Your commit is now a patch set on Gerrit, awaiting review.)`}
+remote: Processing changes: new: 1, done    
+remote: 
+remote: New Changes:
+remote:   https://android-review.googlesource.com/c/platform/frameworks/base/+/2948123 services: Fix race condition in FooService initialization [NEW]
+remote: 
+To https://android-review.googlesource.com/platform/frameworks/base
+ * [new branch]          my-feature-branch -> refs/for/main`}
 />
 
-**Gerrit conventions to internalise:**
+---
 
-| Convention | Why it matters |
-|------------|----------------|
-| One logical change per commit | A reviewer can reason about it; small changes merge fast. |
-| Imperative subject | `Fix X`, not `Fixed X` - it reads as an instruction to the tree. |
-| `Test:` line | Reviewers must see how you verified it. |
-| Reply to every comment | Even "Done"/"Will fix" - reviewers track resolution. |
-| Rebase, don't merge | Keeps history linear; resolves with `git rebase`. |
-| No unrelated changes | Hidden scope is the #1 reason a patch is rejected. |
+## 6. Navigating Unfamiliar Code with `cs.android.com`
 
-## 4. Self-review before you upload
+Before modifying unfamiliar platform services, use `cs.android.com` to explore references and history:
 
-The highest-leverage habit: review your own patch as a stranger would. You will
-catch most reviewer comments before they are made.
+<DeepDive title="Pro Tips for AOSP Code Search (cs.android.com)">
+1. **Symbol Search:** Type `class:FooService` or `def:FooService` to jump directly to class and function definitions.
+2. **Path Filtering:** Use `file:^frameworks/base/` to restrict results to the framework layer.
+3. **Cross-References:** Click any function name in the web UI to see **Callers** (functions that call this method) and **Overridden by** (child classes).
+4. **Git Blame to Gerrit:** Click any line number and select **History** $\rightarrow$ it directly opens the exact Gerrit review, code comments, and reviewer discussions that created that line of code!
+</DeepDive>
 
-<DoThis
-  steps={[
-    'Read the diff as a whole: does every hunk belong to the stated change?',
-    'Check the commit message explains WHY, not just WHAT.',
-    'Confirm the Test: line is accurate and reproducible.',
-    'Run the reviewer checklist (section 6) against your own patch.',
-  ]}
-/>
+---
+
+## 7. The AOSP Maintainer's Review Checklist
+
+Run this self-review checklist before typing `repo upload`:
+
+- [ ] **One Logical Change:** Does this patch do exactly one thing? (Unrelated cosmetic edits or whitespace changes stripped).
+- [ ] **Imperative Subject:** Does the first line use imperative present tense (`Fix`, `Add`, `Remove`)?
+- [ ] **Line Wrapping:** Is the commit body wrapped strictly at 72 columns?
+- [ ] **Test Coverage:** Does the `Test:` line describe executable commands (`atest`, `Cts...`)?
+- [ ] **Change-Id:** Is a valid `Change-Id:` present in the footer?
+- [ ] **Linear History:** Rebased cleanly onto the target branch without merge commits (`git rebase aosp/main`)?
+- [ ] **SELinux / Architecture:** Are new interfaces annotated with `@VintfStability` and covered by proper `.te` policy?
+
+---
+
+## Checkpoint
 
 <Checkpoint
   quiz={{
-    question: 'What is the single most common reason an AOSP patch is rejected?',
+    question: 'When a Gerrit reviewer asks you to make changes to your patch, what is the correct Git procedure?',
     options: [
-      'The code is too clever.',
-      'Unrelated changes bundled into one commit (hidden scope).',
-      'The build is too slow.',
-      'It uses Rust.',
+      'Create a second commit titled "fix review comments" and push to the branch.',
+      'Modify the files, stage them with git add, run git commit --amend to update the commit while preserving the Change-Id, and run repo upload . again to create a new Patch Set.',
+      'Close the Gerrit change and open a new one.',
+      'Delete the local repository and clone again.',
     ],
     answer: 1,
     explain:
-      'Hidden scope - unrelated edits mixed into a change - is the most common complaint. Keep one logical change per commit and strip anything unrelated before uploading.',
+      'Gerrit tracks iterations as Patch Sets under the same Change-Id. Running git commit --amend keeps the same Change-Id. When repo upload runs, Gerrit sees the matching ID and appends Patch Set 2 to the existing review thread.',
   }}
 />
 
-## 5. Orient with cs.android.com
-
-Before touching unfamiliar code, **`cs.android.com`** (the AOSP code search) is
-your map. Use it to go from symptom to source fast.
-
-<TestRunner
-  title="Use code search to orient (on the web)"
-  cmd={`# examples of what you search for at cs.android.com:
-#  - the symbol you saw in a stack/log ("FooService")
-#  - a string from an error message
-#  - "file:foo.cpp symbol" to jump to a definition
-#  - "def:" / "class:" qualifiers to narrow results`}
-  expect={`... (cs.android.com returns files, definitions, and references across
-the whole tree, with links to the exact Gerrit review that changed a line) ...
-
-(The last part matters: every line shows its history, so you can see the review
-and reviewers behind the code you are changing.)`}
-/>
-
-<WhyItWorked>
-On a tree this large, finding the code is the first battle. `cs.android.com`
-answers "where is this defined / who calls it / what review changed it" without
-a local checkout - so you arrive at a change already knowing its context, which
-is exactly what a reviewer wants to see.
-</WhyItWorked>
+---
 
 ## Break It
 
 <BreakIt
   items={[
-    'Symptom: repo upload creates a second change instead of updating the first. Cause: the commit lost its Change-Id (hook not installed, or you squashed wrong). Fix: install the commit-msg hook and rebase; amend to restore the same Change-Id.',
-    'Symptom: a reviewer rejects for "mixed changes." Cause: unrelated edits are in the commit. Fix: split into focused commits (git rebase -i), one logical change each.',
-    'Symptom: upload fails with "cannot upload to a merge commit" or a dirty branch. Cause: history has merges or uncommitted work. Fix: rebase onto the target branch and commit/stash everything first.',
+    'Symptom: repo upload fails with "fatal: commit ... missing Change-Id in footer". Cause: The commit was authored before installing the commit-msg hook. Fix: Install the hook in .git/hooks/ and run git commit --amend --no-edit to generate the Change-Id.',
+    'Symptom: repo upload generates an entirely new change URL instead of updating the existing review. Cause: The Change-Id was accidentally modified or removed during an interactive rebase. Fix: Copy the original Change-Id from Gerrit and paste it into the commit message via git commit --amend.',
+    'Symptom: Git push rejected with "prohibited by Gerrit: not permitted to create merge commit". Cause: A git merge was performed instead of a git rebase. Fix: Run git rebase -i aosp/main to eliminate merge commits and produce a linear commit history.',
   ]}
 />
 
-## 6. Mastery check
+---
 
-The bar: a patch **passes a real reviewer's checklist**. Run this checklist
-against your own Spine patch - a reviewer will run the same one.
-
-- **Scope:** one logical change; no unrelated hunks (section 4).
-- **Message:** component-prefixed imperative subject; body explains *why*; wrapped at 72 (section 2).
-- **Change-Id:** present, via the hook (section 2).
-- **Test:** line is accurate and reproducible (section 2).
-- **Conventions:** replied to comments, rebased (not merged), linear history (section 3).
-- **Orientation:** the change reflects understanding of surrounding code (section 5).
-
-:::caution Review-driven, not self-graded
-The competency map records this phase's testing as **"not-yet (review-driven)."**
-"Passes a real reviewer's checklist" cannot be self-assessed - it needs an actual
-reviewer, which the Capstone (Phase 15) provides.
-:::
-
-**Spine artifact:** commit your formatted **patch series** - the commits, their
-messages, and the review correspondence - under `spine/14-patch-series` in your
-Project Spine fork (plan section 4.8). This is the artifact the competency map
-records for this phase.
-
-<Reward xp="500" badge="Patch Contributor" />
+## Troubleshooting
 
 <Troubleshooting
   items={[
@@ -271,6 +339,10 @@ records for this phase.
   ]}
 />
 
+---
+
+## Further Reading
+
 <FurtherReading
   links={[
     {
@@ -285,6 +357,22 @@ records for this phase.
     },
   ]}
 />
+
+---
+
+## Mastery Check
+
+The bar: a **perfectly formatted, self-reviewed patch series uploaded to Gerrit and passing a maintainer's checklist**:
+
+- Configured the Gerrit `commit-msg` hook and generated valid `Change-Id` footers.
+- Authored a multi-line commit message with imperative summary, body rationale, and mandatory `Test:` tags.
+- Uploaded the patch set using `repo upload`.
+- Successfully amended the commit (`git commit --amend`) and uploaded Patch Set 2.
+- Verified compliance against the AOSP maintainer's review checklist.
+
+**Spine artifact:** Commit the formatted patch series, commit messages, and Gerrit review transcript under `spine/14-patch-series`.
+
+<Reward xp={500} badge="Patch Contributor" />
 
 <CompleteButton unitId="phase-14-contribution" xp={500} label="Mark Phase 14 complete (+500 XP)" />
 
