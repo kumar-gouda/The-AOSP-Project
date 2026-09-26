@@ -700,6 +700,16 @@ nm alignment_probe | grep -E 'main|Optimized'`}
   }}
 />
 
+## Break It
+
+<BreakIt
+  items={[
+    'Symptom: Segmentation fault (SIGSEGV) when accessing std::string_view. Cause: The underlying std::string was a temporary that was destroyed after statement completion, leaving the string_view with a dangling pointer. Fix: Ensure the backing string outlives any string_view referencing it, or convert to a heap-allocated std::string.',
+    'Symptom: sp<T> circular reference causes memory leak where destructors never run. Cause: Two objects hold strong references to each other via sp<T>. Fix: Break the reference cycle by converting one side of the association to an android::wp<T> weak pointer.',
+    'Symptom: container_of returns garbage addresses or causes page fault. Cause: Passing the wrong member name or struct type to container_of, causing incorrect byte offset subtraction. Fix: Ensure the pointer and member name match the exact struct definition.',
+  ]}
+/>
+
 ## Reward
 
 <Reward xp="500" badge="Bilingual - C++17 and systems-C" />

@@ -313,6 +313,16 @@ adb shell getprop persist.vendor.demo.active`}
   }}
 />
 
+## Break It
+
+<BreakIt
+  items={[
+    'Symptom: Boot hangs on bootloader splash screen; adb does not connect. Cause: Syntax error in first-stage init.rc or missing root mount point. Fix: Inspect early UART console logs or boot into recovery to check init logs.',
+    'Symptom: init service marked "restarting too fast" and killed. Cause: The executable crashed on launch due to missing shared libraries or SELinux denial. Fix: Check logcat -b crash and dmesg | grep avc.',
+    'Symptom: setprop returns permission denied. Cause: The property name violates SELinux property_contexts namespace restrictions. Fix: Add an allow rule or use the vendor. prefix for vendor services.',
+  ]}
+/>
+
 ## Reward
 
 <Reward xp="500" badge="Boot Chain Narrator" />

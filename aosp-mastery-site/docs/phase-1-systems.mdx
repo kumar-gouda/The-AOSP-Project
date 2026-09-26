@@ -525,6 +525,16 @@ Notice what happened at the kernel level:
   }}
 />
 
+## Break It
+
+<BreakIt
+  items={[
+    'Symptom: mmap fails with errno 14 (EFAULT) or crashes with SIGBUS. Cause: ftruncate was not called on the shm_open file descriptor, leaving the shared memory object with a size of 0 bytes. Fix: Always call ftruncate(fd, size) immediately after shm_open before mapping.',
+    'Symptom: Child process modifications to shared memory are invisible to the parent. Cause: Passed MAP_PRIVATE instead of MAP_SHARED to mmap, resulting in Copy-On-Write private memory pages. Fix: Ensure flags contain MAP_SHARED.',
+    'Symptom: Zombie processes accumulating in ps output after fork(). Cause: Parent process did not call waitpid() to reap terminated child process exit status. Fix: Implement a waitpid() loop or handle SIGCHLD with SA_NOCLDWAIT.',
+  ]}
+/>
+
 ## Reward
 
 <Reward xp="500" badge="Systems Foundations" />

@@ -359,6 +359,16 @@ Access the visual interactive screen of your running Cuttlefish Android device b
   }}
 />
 
+## Break It
+
+<BreakIt
+  items={[
+    'Symptom: Soong error: "module ... already defined". Cause: Duplicate module name in two different Android.bp files in your source tree. Fix: Search with find . -name Android.bp | xargs grep "name: \\"foo\\"" and rename one module.',
+    'Symptom: lunch fails with "Cannot locate config for <target>". Cause: Typos in product name or lunch target not declared in AndroidProducts.mk. Fix: Check the available lunch list via lunch (with no arguments).',
+    'Symptom: Ninja build fails with "multiple rules generate ...". Cause: Conflicting build outputs between a Soong rule and an older Kati Android.mk rule. Fix: Remove the redundant Android.mk or rename target outputs.',
+  ]}
+/>
+
 ## Reward
 
 <Reward xp="500" badge="Build System Driver" />

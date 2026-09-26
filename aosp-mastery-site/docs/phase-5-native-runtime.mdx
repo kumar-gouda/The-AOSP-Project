@@ -415,6 +415,16 @@ In Rust, the **Borrow Checker** validates object ownership, lifetimes, and refer
   }}
 />
 
+## Break It
+
+<BreakIt
+  items={[
+    'Symptom: Native daemon crashes with SIGSEGV on SIGTERM signal. Cause: Calling non-async-signal-safe functions (like malloc or printf) inside a POSIX signal handler. Fix: Set an atomic_bool flag or write to a self-pipe inside the signal handler; perform cleanup in the main event loop.',
+    'Symptom: atest fails to discover your cc_test module. Cause: Missing test_suites: ["general-tests"] in the cc_test Android.bp declaration. Fix: Add test_suites attribute to your Android.bp rule.',
+    'Symptom: Dynamic linker error: "library libfoo.so not found". Cause: Shared library not installed in /system/lib64/ or missing rpath. Fix: Add the library to PRODUCT_PACKAGES or shared_libs.',
+  ]}
+/>
+
 ## Reward
 
 <Reward xp="500" badge="Native Daemon Engineer" />

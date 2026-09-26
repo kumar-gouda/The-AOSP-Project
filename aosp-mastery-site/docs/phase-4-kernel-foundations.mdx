@@ -303,6 +303,16 @@ When no IPC requests exist, server threads sleep on a Linux **wait queue** (`thr
   }}
 />
 
+## Break It
+
+<BreakIt
+  items={[
+    'Symptom: insmod fails with "Unknown symbol in module". Cause: The driver uses a kernel symbol not exported in the KMI whitelist (kmi_symbol_list). Fix: Submit a KMI symbol addition request or refactor the driver to use approved KMI functions.',
+    'Symptom: launch_cvd crashes on startup with kernel panic. Cause: Built GKI kernel configuration missing virtio drivers required by Cuttlefish. Fix: Ensure gki_defconfig includes CONFIG_VIRTIO and CONFIG_DRM_VIRTIO_GPU.',
+    'Symptom: Binder transaction fails with BR_DEAD_REPLY. Cause: Target server process crashed or terminated while processing the remote procedure call. Fix: Check logcat -b crash and tombstones for the server process.',
+  ]}
+/>
+
 ## Reward
 
 <Reward xp="500" badge="GKI Builder" />
