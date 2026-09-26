@@ -1,0 +1,278 @@
+---
+id: phase-0-basecamp
+title: Phase 0 — Basecamp
+sidebar_position: 2
+---
+
+import {
+  Hook,
+  Outcome,
+  Prereqs,
+  DoThis,
+  WhyItWorked,
+  BreakIt,
+  Checkpoint,
+  Reward,
+  NextMission,
+  Troubleshooting,
+  FurtherReading,
+} from '@site/src/components/Unit';
+import {PhaseHeader} from '@site/src/components/PhaseHeader';
+import {CompleteButton} from '@site/src/components/Progress';
+import {TestRunner} from '@site/src/components/TestRunner';
+
+# Phase 0 — Basecamp
+
+<PhaseHeader tier="Recruit" time={3} difficulty="beginner" />
+
+This phase is a **verified, scriptable gate**: a beginner who cannot build
+AOSP must be told *before* they sink days into it. Every fact on this page is
+verified against source.android.com (see the plan's Verification Table).
+
+<Hook>
+Set up mission control before the first mission.
+</Hook>
+
+<Outcome>
+A machine that provably meets AOSP's build requirements, the source tree checked
+out on a modern branch, and the Cuttlefish virtual device installed - plus the
+ability to point, from memory, to where a feature lives in the tree.
+</Outcome>
+
+<Prereqs
+  interactive
+  items={[
+    'A 64-bit Linux host (Ubuntu 18.04 or later).',
+    'Repo launcher >= 2.4 (verified with `repo version`).',
+    'Disk and RAM verified by the self-check below — no guessing.',
+    'Foundational C++17 and systems-C competency from Phase -1.',
+  ]}
+/>
+
+## 1. Hardware self-check (run this first)
+
+Paste this into a shell. Every line must pass. If any fails, **stop** — a
+32 GB-RAM or 200 GB-disk machine cannot build modern AOSP.
+
+<TestRunner
+  title="Hardware / OS self-check"
+  cmd={`# Host OS (need 64-bit Linux, glibc >= 2.17)
+uname -m && ldd --version | head -n1
+
+# Disk: need >= 400 GB free where you'll check out + build
+df -h . | awk 'NR==2{print "Free on this mount: "$4}'
+
+# RAM: need >= 64 GB
+free -h | awk 'NR==2{print "Total RAM: "$2}'
+
+# Virtualization (for the Cuttlefish virtual device later)
+grep -c -w "vmx\\|svm" /proc/cpuinfo      # must be nonzero`}
+  expect={`x86_64
+ldd (Ubuntu GLIBC 2.xx) ...
+Free on this mount: 4xxG
+Total RAM: 6xxG
+(vmx/svm count: nonzero)
+
+(Confirm each line passes. Exact values depend on your machine.)`}
+/>
+
+<DoThis
+  steps={[
+    'Run the four checks above.',
+    'Confirm the OS is 64-bit and glibc is 2.17 or later.',
+    'Confirm at least 400 GB free and at least 64 GB RAM.',
+    'Confirm the virtualization line returns a nonzero number.',
+  ]}
+/>
+
+<WhyItWorked>
+AOSP's own requirements page states a 64-bit system, at least 400 GB free disk
+(250 GB to check out + 150 GB to build), and a minimum of 64 GB of RAM. Checking
+these before a repo sync is the single most effective way to avoid the most
+common beginner dropout: a multi-hour download that cannot build.
+</WhyItWorked>
+
+## 2. Install the host packages
+
+The latest release branch **ships prebuilt OpenJDK, Make, and Python 3** - you
+do not hand-install them. You *do* install the build packages and the Repo
+launcher:
+
+<TestRunner
+  title="Host build packages + Repo launcher"
+  cmd={`sudo apt-get update
+sudo apt-get install git-core gnupg flex bison build-essential zip curl \\
+  zlib1g-dev libc6-dev-i386 x11proto-core-dev libx11-dev lib32z1-dev \\
+  libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig
+sudo apt-get install repo           # launcher; verify >= 2.4
+repo version`}
+  expect={`repo launcher version 2.4x
+       (from https://gerrit.googlesource.com/git-repo)
+
+(repo version must be >= 2.4)`}
+/>
+
+<WhyItWorked>
+This package list is the exact command from source.android.com's setup page for
+Ubuntu 18.04 and later. Installing repo this way gives you the launcher, which
+then downloads the full Repo tool on first use.
+</WhyItWorked>
+
+### Cuttlefish host packages
+
+Cuttlefish is the virtual device the Core Path runs on. Install its host
+packages (source.android.com/docs/devices/cuttlefish/get-started):
+
+<TestRunner
+  title="Cuttlefish host install"
+  cmd={`sudo apt install -y git devscripts equivs config-package-dev debhelper-compat golang curl
+git clone https://github.com/google/android-cuttlefish
+cd android-cuttlefish
+tools/buildutils/build_packages.sh
+sudo dpkg -i ./cuttlefish-base_*_*64.deb || sudo apt-get install -f
+sudo dpkg -i ./cuttlefish-user_*_*64.deb || sudo apt-get install -f
+sudo usermod -aG kvm,cvdnetwork,render $USER
+sudo reboot`}
+  expect={`(...packages build and install...)
+cuttlefish-base ... installed
+cuttlefish-user ... installed
+
+You are added to kvm, cvdnetwork, render. REBOOT so the group change takes
+effect.`}
+/>
+
+:::warning Reboot, then verify your groups
+The usermod group change only applies to new sessions, so reboot. After
+rebooting, run groups and confirm you see kvm, cvdnetwork, and render.
+Without these, Cuttlefish cannot start.
+:::
+
+<BreakIt
+  items={[
+    'Run repo version and see a version below 2.4: your launcher is stale. Reinstall it, and verify.',
+    'Run the self-check on a machine with 32 GB RAM: free -h fails the gate. This is the failure the plan is designed to catch early.',
+    'Run launch_cvd and get a KVM permission error: you skipped the reboot after usermod, so your shell is not yet in the kvm group. Reboot and re-check with groups.',
+  ]}
+/>
+
+<Checkpoint
+  quiz={{
+    question: 'Why check hardware before running repo sync?',
+    options: [
+      'Because repo sync refuses to run on small disks.',
+      'Because a full checkout plus build needs at least 400 GB of disk and 64 GB of RAM, and finding out after a multi-hour download is the most common reason beginners quit.',
+      'Because the build server checks your RAM remotely.',
+      'Because glibc older than 2.17 blocks DNS.',
+    ],
+    answer: 1,
+    explain:
+      'The requirements page states >=400 GB disk (250 checkout + 150 build) and >=64 GB RAM. This gate catches an under-spec machine before hours of downloading.',
+  }}
+/>
+
+## 3. Get the source on a modern branch
+
+Google recommends syncing the android-latest-release branch (not a raw
+aosp-main):
+
+<TestRunner
+  title="Checkout the source"
+  cmd={`mkdir aosp && cd aosp
+repo init -u https://android.googlesource.com/platform/manifest -b android-latest-release
+repo sync -j8`}
+  expect={`repo initialized in .../aosp
+(...syncing projects...)
+Syncing work tree: 100% (...)
+Done.
+
+(This can take a long time and a lot of disk. That is expected.)`}
+/>
+
+<WhyItWorked>
+android-latest-release is the branch Google documents as the recommended sync
+target. Pinning to it - rather than a floating branch - is what makes the rest
+of this course reproducible.
+</WhyItWorked>
+
+:::note The tree is read-only during build on Android 17+
+Modern AOSP (Android 17+) checks the source tree out read-only. If a build step
+needs to write into the tree, the documented override is
+BUILD_BROKEN_SRC_DIR_IS_WRITABLE=true. You will meet this again in Phase 2;
+for now, know it is expected behaviour, not a bug in your setup.
+:::
+
+## 4. Mastery check
+
+Given a feature description, point to where in the tree it lives - using
+Android Code Search at cs.android.com - with no hints:
+
+| Directory | What lives there |
+|-----------|------------------|
+| frameworks/ | The Android framework (e.g. frameworks/base - system_server, services) |
+| system/ | Core native system components (e.g. system/core - init, logd) |
+| hardware/ | HALs and hardware interfaces |
+| device/ | Device-specific configuration trees |
+| kernel/ | Kernel sources and build integration |
+| packages/ | Bundled apps and services (e.g. packages/apps) |
+
+<Checkpoint
+  quiz={{
+    question: 'You need to change how a system service exposes an API to apps. Which top-level directory?',
+    options: [
+      'packages/',
+      'kernel/',
+      'frameworks/ (e.g. frameworks/base)',
+      'device/',
+    ],
+    answer: 2,
+    explain:
+      'Framework services and their app-facing APIs live under frameworks/, primarily frameworks/base. packages/ holds bundled apps; device/ holds device config; kernel/ is the kernel.',
+  }}
+/>
+
+<Reward xp="500" badge="Basecamp Established" />
+
+<Troubleshooting
+  items={[
+    {
+      symptom: 'repo init fails with fatal: cannot make ./repo directory',
+      cause: 'Running repo init inside an existing nested git tree or without write permissions.',
+      fix: 'Create a dedicated directory (e.g. mkdir ~/aosp && cd ~/aosp) before invoking repo init.',
+    },
+    {
+      symptom: 'launch_cvd fails: /dev/kvm permission denied',
+      cause: 'Current user is not in the kvm and render groups.',
+      fix: 'Run sudo usermod -aG kvm,cvdnetwork,render $USER and log out then back in.',
+    },
+    {
+      symptom: 'repo sync hangs or disconnects with RPC failed: curl 56',
+      cause: 'Network throttling or socket timeout during multi-gigabyte pack transfer.',
+      fix: 'Sync with fewer parallel jobs and clone bundle bypass: repo sync -c -j4 --no-clone-bundle.',
+    },
+  ]}
+/>
+
+<FurtherReading
+  links={[
+    {
+      title: 'AOSP Establishing a Build Environment',
+      url: 'https://source.android.com/docs/setup/build/requirements',
+      desc: 'Official hardware, storage, and host operating system prerequisites.',
+    },
+    {
+      title: 'Cuttlefish Virtual Device Documentation',
+      url: 'https://source.android.com/docs/devices/cuttlefish',
+      desc: 'Architecture, guest-host WebRTC graphics, and kernel configuration for Cuttlefish.',
+    },
+  ]}
+/>
+
+<CompleteButton unitId="phase-0-basecamp" xp={500} label="Mark Phase 0 complete (+500 XP)" />
+
+<NextMission to="/docs/phase-1-systems">
+Phase 1 — Systems Foundations. With the machine verified, learn the language the
+whole OS speaks: fork/exec, shared memory, cross-compilation, and strace.
+</NextMission>
+
+
+

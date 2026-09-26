@@ -1,0 +1,252 @@
+.roadmapWrapper {
+  margin: 1.5rem 0 3rem;
+}
+
+.overviewBar {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1.5rem;
+  background: var(--ifm-background-surface-color);
+  border: 1px solid var(--ifm-color-emphasis-200);
+  border-radius: 12px;
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 2.5rem;
+  box-shadow: var(--ifm-global-shadow-lw);
+}
+
+.metric {
+  display: flex;
+  flex-direction: column;
+}
+
+.metricLabel {
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ifm-color-emphasis-600);
+}
+
+.metricValue {
+  font-size: 1.5rem;
+  font-weight: 800;
+  color: var(--ifm-color-primary);
+  margin-top: 0.25rem;
+}
+
+.metricSub {
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: var(--ifm-color-emphasis-600);
+}
+
+.progressContainer {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.progressTrack {
+  height: 12px;
+  background: var(--ifm-color-emphasis-200);
+  border-radius: 999px;
+  overflow: hidden;
+  margin-bottom: 0.4rem;
+}
+
+.progressBar {
+  height: 100%;
+  background: var(--ifm-color-primary);
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+
+.progressPercent {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--ifm-color-emphasis-700);
+  text-align: right;
+}
+
+/* Timeline */
+.timeline {
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+.nodeCard {
+  display: flex;
+  position: relative;
+  margin-bottom: 1rem;
+}
+
+.railCol {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-right: 1.25rem;
+  min-width: 38px;
+}
+
+.circleMarker {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: var(--ifm-background-surface-color);
+  border: 3px solid var(--ifm-color-emphasis-400);
+  color: var(--ifm-color-emphasis-700);
+  font-weight: 800;
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2;
+  transition: all 0.2s ease;
+}
+
+.circleCompleted {
+  background: var(--ifm-color-primary);
+  border-color: var(--ifm-color-primary);
+  color: #fff;
+  font-size: 1.1rem;
+}
+
+.connectorLine {
+  width: 3px;
+  flex-grow: 1;
+  background: var(--ifm-color-emphasis-200);
+  margin-top: 4px;
+  margin-bottom: -10px;
+}
+
+.nodeCardCompleted .connectorLine {
+  background: var(--ifm-color-primary-light);
+}
+
+.cardContent {
+  flex-grow: 1;
+  background: var(--ifm-background-surface-color);
+  border: 1px solid var(--ifm-color-emphasis-200);
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+  box-shadow: var(--ifm-global-shadow-lw);
+  transition: transform 0.15s ease, border-color 0.15s ease;
+}
+
+.cardContent:hover {
+  border-color: var(--ifm-color-primary);
+}
+
+.nodeCardCompleted .cardContent {
+  border-left: 4px solid var(--ifm-color-primary);
+}
+
+.cardHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+
+.titleRow {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.phaseNum {
+  font-size: 0.85rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  color: var(--ifm-color-primary);
+}
+
+.phaseTitle {
+  font-size: 1.15rem;
+  margin: 0;
+}
+
+.badgeRow {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.tierPill {
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  color: #fff;
+}
+
+.timePill {
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  background: var(--ifm-color-emphasis-100);
+  color: var(--ifm-color-emphasis-700);
+}
+
+.xpPill {
+  font-size: 0.78rem;
+  font-weight: 700;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.15);
+  color: #d97706;
+}
+
+.subtitle {
+  font-size: 0.92rem;
+  color: var(--ifm-color-emphasis-700);
+  margin: 0.25rem 0 0.8rem;
+  line-height: 1.4;
+}
+
+.metaRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  padding-top: 0.6rem;
+  border-top: 1px dashed var(--ifm-color-emphasis-200);
+}
+
+.artifactLabel {
+  font-size: 0.85rem;
+  color: var(--ifm-color-emphasis-600);
+}
+
+/* Tier Colors */
+.tierRecruit {
+  background: #64748b;
+}
+
+.tierBuilder {
+  background: #0ea5e9;
+}
+
+.tierEngineer {
+  background: #10b981;
+}
+
+.tierArchitect {
+  background: #a855f7;
+}
+
+.tierMaster {
+  background: #f59e0b;
+}
+
+@media screen and (max-width: 600px) {
+  .railCol {
+    display: none;
+  }
+}

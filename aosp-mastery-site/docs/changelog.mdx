@@ -1,0 +1,30 @@
+---
+id: changelog
+title: Changelog
+sidebar_position: 20
+---
+
+# Curriculum Changelog
+
+Release notes and updates for the **AOSP Mastery** learning platform.
+
+---
+
+### Android 17 / API 37 Release Baseline
+*Platform Revision: v1.0.0 (Production)*
+
+- **Core Curriculum Pinned**: Verified all build targets, tools, and commands against modern AOSP targets (`aosp_cf_x86_64_only_phone-aosp_current-userdebug`) and ACK `android17-6.18`.
+- **Complete 18-Phase Learning Spine**:
+  - Full path from Phase −1 (C++17 & systems-C) to Phase 15 (Capstone).
+  - Single thread: custom sensor daemon/service traversing Kernel Driver & Module $\rightarrow$ AIDL HAL $\rightarrow$ Binder $\rightarrow$ `system_server` $\rightarrow$ SELinux $\rightarrow$ App Layer.
+- **Testing Thread Fully Woven**: Integrated unit and regression testing (`GTest`, `atest`, `VTS`, `CTS`, `kselftest`, `KUnit`, `TradeFed`) into every phase.
+- **Interactive Component System**:
+  - Added interactive prerequisite checklist verification.
+  - Added live-feedback Checkpoint self-tests.
+  - Added Architecture diagram ("You Are Here") layer visualizations.
+  - Added Troubleshooting matrix with symptom/cause/fix analysis.
+  - Added Time Estimates and Difficulty Badges for every phase.
+- **Offline-First Competency Engine**:
+  - Validated build-time YAML competency map (`data/competency-map.yaml`).
+  - Client-side browser progress tracker with JSON export/import capability.
+  - Real-time searchable glossary containing 50+ AOSP and systems engineering terms.

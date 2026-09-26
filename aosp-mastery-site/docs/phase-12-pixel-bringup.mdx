@@ -1,0 +1,307 @@
+---
+id: phase-12-pixel-bringup
+title: Phase 12 - Pixel Bring-Up Workshop
+sidebar_position: 15
+---
+
+import {
+  Hook,
+  Outcome,
+  Prereqs,
+  DoThis,
+  WhyItWorked,
+  BreakIt,
+  Checkpoint,
+  Reward,
+  NextMission,
+  Troubleshooting,
+  FurtherReading,
+} from '@site/src/components/Unit';
+import {PhaseHeader} from '@site/src/components/PhaseHeader';
+import {CompleteButton} from '@site/src/components/Progress';
+import {TestRunner} from '@site/src/components/TestRunner';
+
+# Phase 12 - Pixel Bring-Up Workshop
+
+<PhaseHeader tier="Master" time={10} difficulty="advanced" />
+
+<Hook>
+Everything you built, now on hardware you can hold.
+</Hook>
+
+<Outcome>
+A **self-built image running on your own Pixel**: you located the device tree and
+kernel sources, extracted the vendor binaries, built with a Pixel `lunch`
+target, unlocked the bootloader, flashed, booted - and cherry-picked a change
+and reflashed it.
+</Outcome>
+
+<Prereqs
+  interactive
+  items={[
+    'Phase 11 complete: you understand partitions, A/B slots, and unlock semantics.',
+    'Phase 2-4 complete: you can lunch, build, and work in the kernel tree.',
+    'A secondary/used supported Pixel. NOT your daily driver.',
+  ]}
+/>
+
+:::danger This is the one irreversible phase - read first
+Unlocking the bootloader **wipes all data on the device**. Flashing the wrong
+image can **brick** it. Use **only a secondary/used device you can afford to
+lose**, never your daily driver. If you are unsure, stop - Phases −1 to 11 teach
+the same architecture without any of this risk.
+:::
+
+:::note Honest status of this page
+Authored against a 64-bit Linux target. Output blocks are marked **expected
+(author-run pending)** where not yet captured on a reference machine. Per this
+project's rule, output is shown verbatim once captured - never paraphrased.
+:::
+
+## 1. Why this is elective - and why it matters
+
+Phases −1 to 11 run entirely on Cuttlefish, where the vendor layer is open and
+the boot chain is virtual. A Pixel has **signed vendor blobs** and a **real
+bootloader**, so it teaches the last mile: real vendor binaries, real fastboot,
+real Verified Boot. That last mile is worth it only if you accept the risk.
+
+<WhyItWorked>
+The architecture does not change on hardware; the *consequences* do. On
+Cuttlefish a mistake costs a reboot; on a Pixel it can cost the device. This
+phase is master-tier precisely because it requires care, a spare device, and
+patience - not because the concepts are new.
+</WhyItWorked>
+
+## 2. Locate the device tree and kernel sources
+
+For a supported Pixel, both the device tree and the kernel sources are public.
+You are *locating and reading*, not authoring, them.
+
+```text
+# the device-specific AOSP source directory (community slang "device tree")
+device/google/<codename>/          # e.g. device/google/husky for Pixel 8 Pro
+# plus a kernel source tree for the device's kernel branch (ACK/GKI)
+```
+
+<DoThis
+  steps={[
+    'Pick a supported codename from the published builds (e.g. husky = Pixel 8 Pro).',
+    'Locate device/google/<codename>/ in your checked-out tree.',
+    'Locate the kernel sources / prebuilt kernel for that device.',
+    'Read the device.mk / BoardConfig to see what the lunch target builds.',
+  ]}
+/>
+
+## 3. Extract the vendor binaries
+
+The vendor layer is not in AOSP - it comes as **signed binaries** you must
+download and extract into your tree. This is the step that makes a Pixel target
+whole.
+
+<TestRunner
+  title="Download and extract vendor binaries"
+  cmd={`# from the device's downloads page (do not guess URLs)
+# 1) download the vendor binaries zip for your build + device, and the matching
+#    factory image zip (for the extract script)
+# 2) from your AOSP root:
+unzip ~/Downloads/google_devices-<codename>-<build>-factory-*.zip
+# 3) run the extract script it contains (it copies vendor/* into your tree)
+./extract-google_devices-<codename>.sh`}
+  expect={`... extracting ...
+... vendor/... copied into your AOSP tree ...
+...
+
+(The extract script places signed vendor binaries where the build expects them.
+You are assembling the real vendor layer AOSP does not ship.)`}
+/>
+
+## 4. Build with a Pixel lunch target
+
+Now the device participates in the build like any other target.
+
+<TestRunner
+  title="Build a Pixel image"
+  cmd={`source build/envsetup.sh
+lunch aosp_<codename>-userdebug      # e.g. aosp_husky-userdebug
+m`}
+  expect={`... building ...
+... out/target/product/<codename>/ ... images ...
+
+(The device tree + vendor binaries make a complete, flashable image set for a
+real Pixel.)`}
+/>
+
+<Checkpoint
+  quiz={{
+    question: 'Why does a Pixel build need the vendor-binary extract step, when Cuttlefish did not?',
+    options: [
+      'Cuttlefish also needs it but hides the step.',
+      'A real Pixel ships signed vendor binaries (radio, GPU, camera, DSP) that AOSP does not contain; extracting them completes the vendor layer.',
+      'The vendor binaries are the kernel.',
+      'Because Pixel builds do not use AOSP source.',
+    ],
+    answer: 1,
+    explain:
+      'On Cuttlefish the vendor layer is generic/open. On a Pixel it is signed blobs you must download and extract into the tree, so the build can produce a complete image set for that hardware.',
+  }}
+/>
+
+## 5. Unlock, flash, boot
+
+The irreversible steps. Unlocking wipes the device; flashing writes images. Do
+this only on a spare device.
+
+<TestRunner
+  title="Unlock the bootloader"
+  cmd={`# put the device in fastboot mode (hold the key combo / adb reboot bootloader)
+fastboot devices
+fastboot flashing unlock
+# confirm on the device screen (this WIPES ALL DATA)`}
+  expect={`... <serial>  fastboot ...
+... OKAY [ ... ] ...
+... (device wipes and reboots) ...
+
+(Unlock wipes userdata - that is the semantics you learned in Phase 11. The
+bootloader is now unlocked.)`}
+/>
+
+<TestRunner
+  title="Flash the full image set and boot"
+  cmd={`# from your tree root, with the build complete:
+fastboot flashall -w`}
+  expect={`... flashing boot_a ...
+... flashing boot_b ...
+... flashing vbmeta_a ...
+... flashing super ...
+... finished. total time: ... 
+...
+
+(-w wipes userdata first. flashall writes a consistent image set to the slots,
+so Verified Boot is satisfied. The device boots your build.)`}
+/>
+
+<WhyItWorked>
+`flashall` writes a **mutually consistent** set of images (Phase 11's wrong-slot
+lesson: the active slot's images and its vbmeta must agree). `-w` wipes userdata
+to avoid a mismatched, encrypted-data boot. Because every image comes from the
+*same* build, Verified Boot is satisfied and the device boots.
+</WhyItWorked>
+
+<Checkpoint
+  quiz={{
+    question: 'Why does `fastboot flashall -w` work where flashing one image to the wrong slot does not?',
+    options: [
+      'It disables Verified Boot.',
+      'It writes a consistent image set across the slots, so the active slot\'s images and its vbmeta agree - which is exactly the consistency Verified Boot checks.',
+      'It uses different hardware.',
+      'It ignores the slots entirely.',
+    ],
+    answer: 1,
+    explain:
+      'flashall writes a matching set (boot + vbmeta + super, per slot). Consistency across images and vbmeta is what Verified Boot requires; a lone mismatched image fails it.',
+  }}
+/>
+
+## 6. Cherry-pick a change and reflash
+
+The proof that this is *your* build: make a visible change, rebuild, reflash,
+and see it on the device.
+
+<DoThis
+  steps={[
+    'Cherry-pick a small, real change (a string, a log line, a small behaviour fix).',
+    'Rebuild with m.',
+    'Reflash (flashall, -w if userdata format changed).',
+    'Confirm the change on the device - then you have closed the loop on real hardware.',
+  ]}
+/>
+
+<Checkpoint
+  quiz={{
+    question: 'What is the mastery bar for this phase?',
+    options: [
+      'Reading about fastboot.',
+      'A self-built image boots on your own (spare) Pixel, including a cherry-picked change you reflashed.',
+      'Building for Cuttlefish.',
+      'Unlocking without flashing.',
+    ],
+    answer: 1,
+    explain:
+      'The bar is concrete: your build, with your change, boots on real hardware. Everything else is preparation for that moment.',
+  }}
+/>
+
+## Break It
+
+<BreakIt
+  items={[
+    'Symptom: fastboot refuses with "not allowed in locked state." Cause: the bootloader is still locked. Fix: fastboot flashing unlock - but know it wipes all data first.',
+    'Symptom: the device bootloops after flashing a single image. Cause: that image does not match the active slot\'s vbmeta (Verified Boot refusal). Fix: flash a consistent set (flashall) rather than a lone image.',
+    'Symptom: the device will not boot the new userdata. Cause: old encrypted userdata from a different build. Fix: use -w to wipe userdata, or fastboot -w, accepting the data loss (this is why you use a spare device).',
+  ]}
+/>
+
+## 7. Mastery check
+
+The bar: **a self-built image boots on your own Pixel**. Concretely, you have:
+
+- Located `device/google/<codename>` and the kernel sources (section 2).
+- Extracted the vendor binaries into your tree (section 3).
+- Built with the Pixel `lunch` target (section 4).
+- Unlocked and flashed a consistent image set, and booted it (section 5).
+- Cherry-picked a change, rebuilt, and reflashed it (section 6).
+
+:::caution Risk, documented
+The competency map records this phase's testing as **"not-yet (hardware
+bring-up; risks documented)."** There is no automated test for "it boots on my
+Pixel" - the risk and the reward are both yours, on a spare device.
+:::
+
+**Spine artifact:** commit your bring-up notes - the `device/google/<codename>`
+path, the vendor-extract command, the `lunch` target, and the change you
+reflashed - under `spine/12-pixel` in your Project Spine fork (plan section
+4.8). This is the artifact the competency map records for this phase.
+
+<Reward xp="500" badge="Pixel Bring-Up Master" />
+
+<Troubleshooting
+  items={[
+    {
+      symptom: 'extract-google_devices-<codename>.sh fails with checksum error',
+      cause: 'Downloaded proprietary vendor tarball corrupted or mismatched AOSP release tag.',
+      fix: 'Re-download binaries from developers.google.com/android/blobs-preview matching the exact build ID.',
+    },
+    {
+      symptom: 'Pixel stuck in bootloader after fastboot flashall with fastboot: error: FAILED',
+      cause: 'Fastboot version too old to support modern dynamic partitions and visual sparse image flashing.',
+      fix: 'Install latest Android SDK Platform-Tools (fastboot >= 34.0.4) and re-run.',
+    },
+    {
+      symptom: 'Device boots into Qualcomm crashdump mode on hardware startup',
+      cause: 'Bootloader, radio, or modem firmware out of sync with new Android 17 system image.',
+      fix: 'Flash the complete factory image package first before flashing customized boot/vendor partitions.',
+    },
+  ]}
+/>
+
+<FurtherReading
+  links={[
+    {
+      title: 'Google Pixel Driver Binaries & Factory Images',
+      url: 'https://developers.google.com/android/drivers',
+      desc: 'Official repository of proprietary hardware drivers (GPU, modem, camera) for Pixel phones.',
+    },
+    {
+      title: 'Flashing Google Devices & Safe Recovery',
+      url: 'https://source.android.com/docs/setup/build/running',
+      desc: 'Fastboot commands, slot recovery, and emergency flashing best practices.',
+    },
+  ]}
+/>
+
+<CompleteButton unitId="phase-12-pixel-bringup" xp={500} label="Mark Phase 12 complete (+500 XP)" />
+
+<NextMission to="/docs/phase-13-production-readiness">
+Phase 13 — Production Readiness Extras. Harden the Spine: a Rust component, a
+minimal APEX, graphics/Camera HAL awareness, and a host-driven test.
+</NextMission>

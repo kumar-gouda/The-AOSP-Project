@@ -1,0 +1,400 @@
+---
+id: phase-minus-1-foundation
+title: Phase -1 - Foundation
+sidebar_position: 1
+---
+
+import {
+  Hook,
+  Outcome,
+  Prereqs,
+  DoThis,
+  WhyItWorked,
+  BreakIt,
+  Checkpoint,
+  Reward,
+  NextMission,
+  Troubleshooting,
+  FurtherReading,
+} from '@site/src/components/Unit';
+import {PhaseHeader} from '@site/src/components/PhaseHeader';
+import {CompleteButton} from '@site/src/components/Progress';
+import {TestRunner} from '@site/src/components/TestRunner';
+
+# Phase -1 - Foundation
+
+<PhaseHeader tier="Builder" time={6} difficulty="intermediate" />
+
+<Hook>
+The OS is written in a language you have not met yet.
+</Hook>
+
+<Outcome>
+A tested, memory-safe C++17 library, plus a hand-written C program that prints
+its own ABI details with `objdump`. These are the two language competencies the
+rest of AOSP assumes: C++17 for userspace, and a distinct systems-C for the
+kernel.
+</Outcome>
+
+<Prereqs
+  interactive
+  items={[
+    'A 64-bit Linux host (Ubuntu 18.04 or later) with g++, gcc, make, binutils (objdump/readelf/nm), and git.',
+    'Basic C++ syntax (loops, functions, classes) - you do not need prior systems or OS experience.',
+    'No AOSP source tree is required for this phase.',
+  ]}
+/>
+
+:::note Honest status of this page
+This phase was authored against a 64-bit Linux target (the same host the rest of
+the course requires, see Phase 0). The commands below are exact and runnable.
+Output blocks are marked **expected** where the course author has not yet
+captured them on a reference machine. Per this project's rule, output is shown
+verbatim once captured - never paraphrased. Until then, treat those blocks as
+"sanity check your result against this", not as a transcript.
+:::
+
+## Why this phase exists
+
+AOSP userspace is C++17/C++20. The kernel is C in a distinct dialect: no STL,
+manual memory, kernel idioms. These are two separate skills, and the plan
+assumes you have neither yet. Learning them here - before Phase 0's environment
+gate - means every later phase is about Android, not about fighting the
+language.
+
+## Track A - C++17 for AOSP userspace (~3-4 weeks)
+
+The goal is a tested, memory-safe library. You will meet the exact features AOSP
+relies on.
+
+### A1. RAII and smart pointers
+
+Do this: write a small type that owns a resource, then make ownership explicit
+with `std::unique_ptr`.
+
+```cpp
+// owner.h
+#pragma once
+#include <memory>
+#include <string>
+
+struct Buffer {
+  explicit Buffer(std::size_t n) : data_(std::make_unique<char[]>(n)), size_(n) {}
+  char*       data()       { return data_.get(); }
+  std::size_t size() const { return size_; }
+ private:
+  std::unique_ptr<char[]> data_;
+  std::size_t             size_;
+};
+```
+
+<WhyItWorked>
+`std::unique_ptr` expresses single ownership: the `Buffer` frees its storage when
+it goes out of scope, with no manual `delete`. This is the same RAII pattern at
+the heart of AOSP's `sp<>`/`wp<>` in the native userspace, and it is why system
+C++ largely avoids exceptions and manual `new`/`delete`.
+</WhyItWorked>
+
+### A2. Move semantics and const-correctness
+
+Do this: make your type movable and pass it by `const&` where you only read.
+
+```cpp
+#include <type_traits>
+static_assert(std::is_move_constructible_v<Buffer>);
+```
+
+### A3. optional, variant, string_view
+
+Do this: model "value or nothing" without a sentinel, and read strings without
+copying.
+
+```cpp
+#include <cstdlib>      // for std::atoi
+#include <optional>
+#include <string>       // for std::string
+#include <string_view>
+
+std::optional<int> parse(const std::string_view s) {
+  if (s.empty()) return std::nullopt;
+  return std::atoi(std::string(s).c_str());
+}
+```
+
+### A4. Error-as-return-value (AOSP avoids exceptions in system code)
+
+Do this: return an error alongside the value instead of throwing.
+
+```cpp
+struct Result {
+  bool ok;
+  int  value;
+};
+```
+
+### A5. Google C++ style, clang-format, clang-tidy, and GTest
+
+Do this: format and lint your library, then write your first unit test.
+
+```bash
+clang-format -i owner.h
+```
+
+Write a first GTest (`owner_test.cpp`):
+
+```cpp
+#include <gtest/gtest.h>
+#include "owner.h"
+
+TEST(BufferTest, Allocates) {
+  Buffer b(16);
+  EXPECT_EQ(b.size(), 16u);
+  EXPECT_NE(b.data(), nullptr);
+}
+```
+
+Build and run it:
+
+<TestRunner
+  title="Build and run the GTest"
+  cmd={`g++ -std=c++17 owner_test.cpp -lgtest -lgtest_main -pthread -o owner_test
+./owner_test`}
+  expect={`[==========] Running 1 test from 1 test suite.
+[----------] 1 test from BufferTest
+[ RUN      ] BufferTest.Allocates
+[       OK ] BufferTest.Allocates (0 ms)
+[----------] 1 test from BufferTest
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+(Expected output - author-run pending. Capture verbatim on your run.)`}
+/>
+
+```bash
+clang-tidy owner.cpp -- -std=c++17
+```
+
+:::tip The TestRunner also runs browser-safe snippets
+Most TestRunner blocks run native commands, which a web page cannot execute -
+those show the command and the expected output only. When a snippet is plain
+JavaScript, the component offers a real **Run** button. Try it:
+
+<TestRunner
+  title="A real, runnable check"
+  cmd={`// paste this into the Run button (JavaScript)
+const ok = [1,2,3].every(n => n > 0);
+console.log('all positive:', ok);`}
+  runnableJs={`const ok = [1,2,3].every(n => n > 0); console.log('all positive:', ok);`}
+  expect={`all positive: true`}
+/>
+:::
+
+### Track A mastery check
+
+A tested, memory-safe C++17 library that builds under `-Wall -Wextra` with zero
+warnings and passes its GTest suite.
+
+## Track B - systems-C for kernel work (~2-3 weeks)
+
+The goal is fluency with the C dialect the kernel actually uses.
+
+### B1. Pointers, pointer arithmetic, and container_of
+
+Do this: walk an array with a pointer, then recover a struct from a member
+pointer the way the kernel's `container_of` does.
+
+```c
+/* b1_container_of.c */
+#include <stddef.h>
+#include <stdio.h>
+
+#define container_of(ptr, type, member) \
+  ((type *)((char *)(ptr) - offsetof(type, member)))
+
+struct item { int value; char name[8]; };
+
+int main(void) {
+  struct item it = { .value = 42, .name = "aosp" };
+  int *vp = &it.value;
+  struct item *back = container_of(vp, struct item, value);
+  printf("value=%d name=%s\n", back->value, back->name);
+  return 0;
+}
+```
+
+```bash
+gcc -std=c11 -Wall -Wextra b1_container_of.c -o b1 && ./b1
+```
+
+Expected (author-run pending):
+
+```text
+value=42 name=aosp
+```
+
+### B2. volatile, alignment, and endianness
+
+Do this: observe byte order with real addresses.
+
+```c
+#include <stdio.h>
+#include <stdint.h>
+
+int main(void) {
+  uint32_t x = 0x01020304;
+  unsigned char *p = (unsigned char *)&x;
+  printf("first byte: 0x%02x\n", p[0]);   /* 0x04 => little-endian */
+  return 0;
+}
+```
+
+### B3. ERR_PTR / IS_ERR
+
+Do this: encode an error in a pointer, the kernel's way of returning both.
+
+```c
+#define MAX_ERRNO 4095
+#define IS_ERR_VALUE(x) ((unsigned long)(void *)(x) >= (unsigned long)-MAX_ERRNO)
+static inline int IS_ERR(const void *ptr) { return IS_ERR_VALUE((unsigned long)ptr); }
+```
+
+### B4. The compilation model: ELF, ABI, readelf/objdump/nm
+
+Do this: compile a tiny program and inspect its ABI directly.
+
+```c
+/* b4_abi.c */
+#include <stdio.h>
+
+struct s { char c; int i; long l; };
+
+int main(void) {
+  printf("sizeof(struct s) = %zu\n", sizeof(struct s));
+  return 0;
+}
+```
+
+```bash
+gcc -std=c11 -O0 b4_abi.c -o b4
+./b4
+objdump -d b4 | sed -n '1,12p'
+```
+
+Expected (author-run pending; exact offsets are ABI-dependent - x86-64 shown):
+
+```text
+sizeof(struct s) = 16
+```
+
+### B5. Cross-compilation to aarch64
+
+Do this: build the same program for AOSP's primary architecture.
+
+```bash
+sudo apt-get install -y gcc-aarch64-linux-gnu
+aarch64-linux-gnu-gcc -std=c11 b4_abi.c -o b4_arm64
+file b4_arm64
+```
+
+Expected (author-run pending):
+
+```text
+b4_arm64: ELF 64-bit LSB pie executable, ARM aarch64, ...
+```
+
+### Track B mastery check
+
+A hand-written C program that prints its own ABI details, inspected with
+`objdump` - built natively and cross-compiled to aarch64.
+
+**Spine artifact:** commit the C++17 library, the ABI-probe program, and a small
+CLI under `spine/00-cpp17-lib`, `spine/00-abi-probe`, and `spine/00-cli` in your
+Project Spine fork (plan section 4.8). These are the artifacts the competency map
+records for this phase.
+
+## Break It
+
+<BreakIt
+  items={[
+    'Symptoms: g++ errors "operator= is implicitly deleted" after adding a unique_ptr member. Cause: unique_ptr is move-only, so the class copy is deleted. Fix: pass by value and std::move, or declare move operations explicitly.',
+    'Symptoms: objdump shows a different struct size than you expected. Cause: padding and alignment rules differ per ABI; char+int+long is not 13 bytes. Fix: reason about alignment per the target ABI, verify with sizeof and objdump - do not assume packed layout.',
+  ]}
+/>
+
+## Checkpoint
+
+<Checkpoint
+  quiz={{
+    question: 'Why does AOSP system code avoid exceptions?',
+    options: [
+      'Exceptions are slower to compile.',
+      'The system and kernel layers favour predictable, checkable control flow and error-as-return-value.',
+      'C++ does not support exceptions on Android.',
+      'The kernel is written in C, so userspace C++ must avoid them too.',
+    ],
+    answer: 1,
+    explain:
+      'System and kernel code prefer explicit, checkable error signals. That is why Track A pairs RAII with the return-a-status pattern instead of throwing.',
+  }}
+/>
+
+<Checkpoint
+  quiz={{
+    question: 'In Track B, why does container_of work?',
+    options: [
+      'Because the compiler reorders struct members at runtime.',
+      'Because offsetof gives the byte offset of a member, so subtracting it recovers the enclosing struct.',
+      'Because pointers to members are always the same address as the struct.',
+      'Because the kernel pads every struct to one cache line.',
+    ],
+    answer: 1,
+    explain:
+      'offsetof(type, member) is a compile-time constant. Subtracting it from the member address yields the address of the containing struct - the same trick the kernel uses everywhere.',
+  }}
+/>
+
+## Reward
+
+<Reward xp="500" badge="Bilingual - C++17 and systems-C" />
+
+<Troubleshooting
+  items={[
+    {
+      symptom: 'fatal error: gtest/gtest.h: No such file or directory',
+      cause: 'libgtest-dev package missing on the host OS.',
+      fix: 'Run sudo apt-get update && sudo apt-get install -y libgtest-dev build-essential.',
+    },
+    {
+      symptom: 'error: use of undeclared identifier std::string_view',
+      cause: 'Compiler defaulting to C++11 or C++14 instead of C++17.',
+      fix: 'Pass -std=c++17 explicitly to g++ or clang++ during compilation.',
+    },
+    {
+      symptom: 'readelf: Error: Not an ELF file',
+      cause: 'Inspecting a source file or shell script instead of the compiled binary.',
+      fix: 'Ensure the target path points to the compiled executable in the build output directory.',
+    },
+  ]}
+/>
+
+<FurtherReading
+  links={[
+    {
+      title: 'Google C++ Style Guide',
+      url: 'https://google.github.io/styleguide/cppguide.html',
+      desc: 'The official formatting and design rules governing AOSP userspace native code.',
+    },
+    {
+      title: 'Linux Kernel Documentation: The container_of() macro',
+      url: 'https://docs.kernel.org/driver-api/basics.html',
+      desc: 'Official explanation of intrusive linked lists and offset pointer arithmetic in kernel C.',
+    },
+  ]}
+/>
+
+<CompleteButton unitId="phase-minus-1-foundation" xp={500} label="Mark Phase -1 complete (+500 XP)" />
+
+<NextMission to="/docs/phase-0-basecamp">
+Phase 0 — Basecamp. With both languages in hand, set up the machine that
+actually builds AOSP.
+</NextMission>

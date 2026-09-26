@@ -1,0 +1,278 @@
+---
+id: phase-8-security-model
+title: Phase 8 - Security Model
+sidebar_position: 10
+---
+
+import {
+  Hook,
+  Outcome,
+  Prereqs,
+  DoThis,
+  WhyItWorked,
+  BreakIt,
+  Checkpoint,
+  Reward,
+  NextMission,
+  ArchitectureDiagram,
+  Troubleshooting,
+  FurtherReading,
+} from '@site/src/components/Unit';
+import {PhaseHeader} from '@site/src/components/PhaseHeader';
+import {CompleteButton} from '@site/src/components/Progress';
+import {TestRunner} from '@site/src/components/TestRunner';
+
+# Phase 8 - Security Model
+
+<PhaseHeader tier="Engineer" time={5} difficulty="advanced" />
+
+<ArchitectureDiagram highlight={['framework', 'hal', 'native', 'kernel']} />
+
+<Hook>
+Lock it down like production.
+</Hook>
+
+<Outcome>
+SELinux **policy and contexts** for your Phase 7 service, a **real audit denial**
+you resolved by reading the log (not by disabling enforcement), the **CTS
+SELinux test components** added, and an understanding of permissions, Keystore,
+and Verified Boot. Your service runs cleanly with SELinux **enforcing**.
+</Outcome>
+
+<Prereqs
+  interactive
+  items={[
+    'Phase 7 complete: a SystemService callable from an app.',
+    'Phase 3 complete: comfortable reading logcat for system messages.',
+    'A Cuttlefish device where you can set SELinux to permissive for debugging.',
+  ]}
+/>
+
+:::note Honest status of this page
+Authored against a 64-bit Linux target. Output blocks are marked **expected
+(author-run pending)** where not yet captured on a reference machine. Per this
+project's rule, output is shown verbatim once captured - never paraphrased.
+:::
+
+## 1. The four walls of Android security
+
+Android layers its defences. You have already met most of them without naming
+them; this phase names them and makes one real.
+
+| Mechanism | What it enforces |
+|-----------|------------------|
+| **Permissions** | Which app/UID may call which API (the mediation you met in Phase 7). |
+| **SELinux** | Mandatory access control: even root is confined by policy. |
+| **Keystore** | Hardware-backed key storage and cryptographic operations. |
+| **Verified Boot** | Refuses to boot a system whose images do not match the signed chain. |
+
+<WhyItWorked>
+Defence in depth: a bug in one wall does not breach the system. SELinux is the
+one you will touch, because every new service must have a policy or the enforcing
+build will deny it at runtime - which is exactly the first symptom you will see.
+</WhyItWorked>
+
+## 2. SELinux: contexts and policy
+
+SELinux labels every process, file, and socket with a **context** (e.g.
+`u:r:foo_service:s0`). **Policy** says which contexts may do what to which
+others. A new service needs:
+
+- A **domain** (the process context, e.g. `foo_service`).
+- **Type rules** allowing it to do its job (open its files, talk to its HAL).
+- A **file context** so its binary and data are labelled correctly.
+
+A minimal policy file looks like this:
+
+```text
+# foo_service.te - a minimal SELinux policy for your service
+type foo_service, domain;
+type foo_service_exec, exec_type, vendor_file_type, file_type;
+
+# Allow init to start the service.
+init_daemon_domain(foo_service)
+
+# Allow the service to use the binder it needs, and read its own files.
+allow foo_service foo_service:file { read open };
+allow foo_service hal_foo_hwservice:hwservice_manager find;
+```
+
+<DoThis
+  steps={[
+    'Add a domain and a file context for your service (foo_service.te, file_contexts).',
+    'Start with enforcement off (permissive) and exercise your service.',
+    'Read the avc denials from logcat/dmesg.',
+    'Add only the allow rules you actually need; re-enable enforcing.',
+  ]}
+/>
+
+<WhyItWorked>
+SELinux policy is deny-by-default: anything you did not explicitly allow is
+blocked. So you do not guess the policy from a manual - you **let the denials
+tell you** what is missing. That is why the workflow is "run in permissive,
+read the denials, add minimal rules, enforce".
+</WhyItWorked>
+
+## 3. Resolve a real audit denial
+
+This is the heart of the phase: cause a denial, read it, fix it properly.
+
+<TestRunner
+  title="Observe an AVC denial"
+  cmd={`adb shell dmesg | grep -i avc | tail -n 10
+adb logcat -b all -d | grep -i "avc: denied" | tail -n 10`}
+  expect={`... avc: denied { read } for pid=... comm="foo_service" \
+    name="..." dev="..." ino=... scontext=u:r:foo_service:s0 \
+    tcontext=u:object_r:some_type:s0 tclass=file ...
+
+(The scontext is your service; the tcontext is what it was not allowed to touch;
+tclass names the kind of object. That single line tells you the exact rule to
+add.)`}
+/>
+
+<TestRunner
+  title="Turn a denial into a suggested rule"
+  cmd={`# from a tree with the build environment sourced
+adb shell dmesg > foo.log
+cat foo.log | grep "avc: denied" | audit2allow`}
+  expect={`#============= foo_service ==============
+allow foo_service some_type:file read;
+
+(Treat audit2allow as a suggestion, not gospel: add the narrowest rule that
+makes the denial go away. Never run audit2allow -M and ship it blindly.)`}
+/>
+
+<Checkpoint
+  quiz={{
+    question: 'What is the correct way to make an AVC denial go away?',
+    options: [
+      'Set SELinux to permissive permanently.',
+      'Read the denial (scontext/tcontext/tclass), add the narrowest allow rule that is actually needed, and keep enforcing on.',
+      'Run `setenforce 0` in production.',
+      'Grant the service the `su` domain.',
+    ],
+    answer: 1,
+    explain:
+      'Policy is deny-by-default. Read the denial to learn scontext/tcontext/tclass, then add the narrowest rule. Disabling enforcement or granting broad domains defeats the protection.',
+  }}
+/>
+
+## 4. Add the CTS SELinux test components
+
+The phase's testing requirement: the **CTS SELinux test components**. CTS
+(Compatibility Test Suite) includes tests that assert the device's SELinux
+posture - that it is enforcing, that key domains exist, and that policy is not
+weakened.
+
+<TestRunner
+  title="Run the SELinux CTS test module"
+  cmd={`# after building/installing the CTS SELinux test components
+atest CtsSecurityHostTestCases -m`}
+  expect={`... (atest builds and runs the CTS security host tests) ...
+[  PASSED  ] ...
+...
+(The CTS SELinux components assert the device enforces SELinux and matches the
+expected policy shape - a stronger bar than "it booted".)`}
+/>
+
+<WhyItWorked>
+A service that "boots" is not enough; it must run **under enforcing** and the
+platform's security tests must still pass. The CTS SELinux components encode
+"production is still locked down" as an automated check - which is exactly the
+mastery bar: the service runs cleanly under enforcing.
+</WhyItWorked>
+
+## 5. The rest of the wall: Keystore and Verified Boot
+
+You will not rebuild these this phase, but you must be able to place them.
+
+- **Keystore** stores keys in hardware-backed secure storage and performs
+  crypto where the key never leaves the secure environment. An app asks Keystore
+  to sign/decrypt; the key itself is not extractable.
+- **Verified Boot** establishes a chain of trust: the bootloader verifies the
+  boot image, which verifies the system. A tampered image breaks the chain and
+  the device refuses to boot (or boots with a warning, depending on state).
+
+<Checkpoint
+  quiz={{
+    question: 'What does Verified Boot guarantee?',
+    options: [
+      'That apps cannot be installed.',
+      'That each boot stage verifies the next against a signed chain, so a tampered image breaks the chain.',
+      'That SELinux is disabled.',
+      'That all keys are stored in plain files.',
+    ],
+    answer: 1,
+    explain:
+      'Verified Boot is a chain of trust: the bootloader verifies the boot image, which verifies the system. A mismatch breaks the chain, so a tampered image is detected before it runs.',
+  }}
+/>
+
+## Break It
+
+<BreakIt
+  items={[
+    'Symptom: the service crashes or misbehaves only on an enforcing build, but works in permissive. Cause: a missing allow rule that permissive logs instead of blocking. Fix: read the avc denials it produces and add the narrowest rules.',
+    'Symptom: audit2allow suggests a very broad rule (e.g. to an unconfined or su domain). Cause: audit2allow is a heuristic. Fix: narrow it by hand; grant only the specific tclass/permission you need.',
+    'Symptom: the CTS SELinux components fail after your change. Cause: you weakened policy to make your service work. Fix: revert the weakening and add precise rules instead - the CTS test exists to catch exactly this.',
+  ]}
+/>
+
+## 6. Mastery check
+
+The bar is: the **service runs cleanly under SELinux enforcing**. Concretely,
+you have:
+
+- Policy and contexts for your Phase 7 service (section 2).
+- Resolved at least one **real audit denial** by reading it and adding a minimal rule (section 3).
+- Added and run the **CTS SELinux test components** (section 4).
+- A clear explanation of permissions, Keystore, and Verified Boot (sections 1, 5).
+
+**Spine artifact:** commit the `.te` policy, the file contexts, and the resolved
+`avc` denial (with the log excerpt) under `spine/08-selinux` in your Project
+Spine fork (plan section 4.8). This is the artifact the competency map records
+for this phase.
+
+<Reward xp="500" badge="Security Hardener" />
+
+<Troubleshooting
+  items={[
+    {
+      symptom: 'checkpolicy: libsepol.report_failure: neverallow violated',
+      cause: 'A broad allow rule violates one of AOSP standard neverallow security assertions.',
+      fix: 'Refine domains; never grant untrusted_app or vendor daemons access to root block devices or raw sockets.',
+    },
+    {
+      symptom: 'Service fails silently when SELinux switched to Enforcing',
+      cause: 'Unlabeled files or missing file_contexts transition for daemon binary.',
+      fix: 'Run restorecon -Rv /vendor/bin/your_daemon and verify file type matches the .te domain entrypoint.',
+    },
+    {
+      symptom: 'dmesg flooded with audit: type=1400 avc: denied entries',
+      cause: 'Missing permissions in process domain for specific sysfs/proc nodes.',
+      fix: 'Use audit2allow -i log.txt to inspect needed rules, then manually hand-author the minimal required allow stanzas.',
+    },
+  ]}
+/>
+
+<FurtherReading
+  links={[
+    {
+      title: 'SELinux for Android Architecture',
+      url: 'https://source.android.com/docs/security/features/selinux',
+      desc: 'Policy layout, macros, domain transitions, and device-specific sepolicy authoring.',
+    },
+    {
+      title: 'Android Verified Boot (AVB)',
+      url: 'https://source.android.com/docs/security/features/verifiedboot',
+      desc: 'Cryptographic chain of trust: vbmeta, dm-verity, and tamper-resistant partition verification.',
+    },
+  ]}
+/>
+
+<CompleteButton unitId="phase-8-security-model" xp={500} label="Mark Phase 8 complete (+500 XP)" />
+
+<NextMission to="/docs/phase-9-debugging-performance">
+Phase 9 — Debugging & Performance. Turn crashes into fixes: tombstones,
+Perfetto, ftrace - and diagnose three seeded bugs with on-device tools only.
+</NextMission>

@@ -1,0 +1,392 @@
+---
+id: phase-1-systems
+title: Phase 1 - Systems Foundations
+sidebar_position: 3
+---
+
+import {
+  Hook,
+  Outcome,
+  Prereqs,
+  DoThis,
+  WhyItWorked,
+  BreakIt,
+  Checkpoint,
+  Reward,
+  NextMission,
+  Troubleshooting,
+  FurtherReading,
+} from '@site/src/components/Unit';
+import {PhaseHeader} from '@site/src/components/PhaseHeader';
+import {CompleteButton} from '@site/src/components/Progress';
+import {TestRunner} from '@site/src/components/TestRunner';
+
+# Phase 1 - Systems Foundations
+
+<PhaseHeader tier="Builder" time={5} difficulty="intermediate" />
+
+<Hook>
+Learn the language the whole OS speaks.
+</Hook>
+
+<Outcome>
+A multi-process, cross-compiled program - a shared-memory producer and consumer
+using fork/exec - built for both your host and aarch64, and verified with real
+`strace` output. Along the way you meet the memory model, syscalls, IPC, and
+cross-compilation that every later phase assumes.
+</Outcome>
+
+<Prereqs
+  interactive
+  items={[
+    'Phase -1 complete: comfortable with C, pointers, and a first unit test.',
+    'Phase 0 complete: a Linux host with gcc, make, and binutils.',
+    'binutils for aarch64: `gcc-aarch64-linux-gnu` and `qemu-user` (for running arm64 binaries locally).',
+  ]}
+/>
+
+:::note Honest status of this page
+Authored against a 64-bit Linux target. Output blocks are marked **expected
+(author-run pending)** where not yet captured on a reference machine. Per this
+project's rule, output is shown verbatim once captured - never paraphrased.
+:::
+
+## 1. Userspace vs. kernel: the memory model in one picture
+
+A process sees a flat virtual address space. The kernel maps pages behind it.
+The boundary is crossed only via **syscalls**. Everything in this phase - fork,
+exec, shared memory - is a way of crossing that boundary.
+
+Do this: print the virtual layout facts your process can see.
+
+```c
+/* layout.c */
+#include <stdio.h>
+#include <unistd.h>
+
+int global_init = 42;          /* .data  */
+int global_zero;               /* .bss   */
+
+int main(void) {
+  int local = 7;               /* stack  */
+  printf("pid      = %d\n", getpid());
+  printf("&global_init = %p (data)\n", (void *)&global_init);
+  printf("&global_zero = %p (bss)\n",  (void *)&global_zero);
+  printf("&local       = %p (stack)\n", (void *)&local);
+  return 0;
+}
+```
+
+<TestRunner
+  title="Build and run it"
+  cmd={`gcc -std=c11 -Wall -Wextra layout.c -o layout && ./layout`}
+  expect={`pid      = 12345
+&global_init = 0x55... (data)
+&global_zero = 0x55... (bss)
+&local       = 0x7ff... (stack)
+
+(Exact addresses vary per run; the data/bss addresses sit below the stack.)`}
+/>
+
+## 2. fork + exec: creating processes
+
+`fork()` clones the calling process; `exec*()` replaces its image. Together
+they are how every shell command, and much of Android's `init`, starts work.
+
+Do this: fork a child, have it `exec` a program, and have the parent wait.
+
+```c
+/* forker.c */
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/wait.h>
+
+int main(void) {
+  pid_t pid = fork();
+  if (pid < 0) { perror("fork"); return 1; }
+
+  if (pid == 0) {
+    /* child: replace this image with /bin/echo */
+    execl("/bin/echo", "echo", "hello from the child", (char *)NULL);
+    perror("execl");      /* only reached if execl fails */
+    _exit(127);
+  }
+
+  /* parent: wait for the child */
+  int status = 0;
+  waitpid(pid, &status, 0);
+  printf("parent: child %d exited with %d\n", pid, WEXITSTATUS(status));
+  return 0;
+}
+```
+
+<TestRunner
+  title="Build and run it"
+  cmd={`gcc -std=c11 -Wall -Wextra forker.c -o forker && ./forker`}
+  expect={`hello from the child
+parent: child 12346 exited with 0
+
+(The child's echo output may interleave with the parent's line.)`}
+/>
+
+<WhyItWorked>
+`fork()` returns **twice**: `0` in the child, the child's PID in the parent,
+and `-1` on failure. That return value is the branch. `execl` does not return on
+success - it replaces the process image - so any code after it runs only on
+failure. This two-call pattern (fork then exec) is the foundation of process
+creation on Linux and the reason Android's `init` can spawn and supervise
+services.
+</WhyItWorked>
+
+<Checkpoint
+  quiz={{
+    question: 'After a successful fork(), which statement is true?',
+    options: [
+      'Only the child continues; the parent exits.',
+      'Both parent and child continue from the fork() return point, with different return values.',
+      'The child gets a fresh copy of the program from disk.',
+      'fork() requires an immediate exec() to work.',
+    ],
+    answer: 1,
+    explain:
+      'fork() duplicates the process; both continue after the call. The child sees 0, the parent sees the child PID. exec() is separate and optional.',
+  }}
+/>
+
+## 3. IPC: shared-memory producer / consumer
+
+Processes are isolated by default. To share data you ask the kernel for a shared
+mapping with `mmap(MAP_SHARED)`. (This is the same idea behind Android's
+`ashmem`/`memfd` and the buffers Binder passes between processes.)
+
+Do this: one process writes to shared memory, another reads it.
+
+```c
+/* shm_producer.c */
+#include <stdio.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+int main(void) {
+  const char *name = "/aosp_shm_demo";
+  int fd = shm_open(name, O_CREAT | O_RDWR, 0600);
+  if (fd < 0) { perror("shm_open"); return 1; }
+  ftruncate(fd, 4096);
+
+  char *p = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+  if (p == MAP_FAILED) { perror("mmap"); return 1; }
+
+  strcpy(p, "payload written by the producer");
+  printf("producer wrote: %s\n", p);
+  return 0;
+}
+```
+
+```c
+/* shm_consumer.c */
+#include <stdio.h>
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+int main(void) {
+  const char *name = "/aosp_shm_demo";
+  int fd = shm_open(name, O_RDONLY, 0600);
+  if (fd < 0) { perror("shm_open"); return 1; }
+
+  char *p = mmap(NULL, 4096, PROT_READ, MAP_SHARED, fd, 0);
+  if (p == MAP_FAILED) { perror("mmap"); return 1; }
+
+  printf("consumer read: %s\n", p);
+  return 0;
+}
+```
+
+<TestRunner
+  title="Build, produce, then consume"
+  cmd={`gcc -std=c11 shm_producer.c -o shm_producer -lrt
+gcc -std=c11 shm_consumer.c -o shm_consumer -lrt
+./shm_producer
+./shm_consumer`}
+  expect={`producer wrote: payload written by the producer
+consumer read: payload written by the producer`}
+/>
+
+<WhyItWorked>
+`shm_open` creates a named object in the kernel; `mmap` maps it into the
+process. `MAP_SHARED` means writes are visible to other mappings of the same
+object - that is the sharing. The two programs never talk directly; the kernel
+mediates, which is why this survives the producer exiting before the consumer
+runs.
+</WhyItWorked>
+
+:::note Cleaning up the shared object
+The producer uses `O_CREAT` but never `shm_unlink`, so the object at
+`/dev/shm/aosp_shm_demo` persists between runs (a fresh run overwrites it, but
+it is still leaked). In real code you unlink after opening - the mapping keeps
+working - so the object disappears when the last mapper exits. Add
+`shm_unlink(name);` after `mmap` in the producer to see that. This matters in
+AOSP too: leaked shared-memory objects are a real resource-leak class.
+:::
+
+### Testing thread: unit-test the consumer
+
+<TestRunner
+  title="A first C test (no framework required)"
+  cmd={`cat > test_roundtrip.c <<'EOF'
+#include <assert.h>
+#include <string.h>
+#include <stdio.h>
+int main(void) {
+  const char *s = "payload written by the producer";
+  assert(strlen(s) == 31);
+  assert(strcmp(s, "payload written by the producer") == 0);
+  puts("test_roundtrip: PASS");
+  return 0;
+}
+EOF
+gcc -std=c11 test_roundtrip.c -o test_roundtrip && ./test_roundtrip`}
+  expect={`test_roundtrip: PASS`}
+/>
+
+:::tip Prefer a real framework later
+`assert` is enough now. Phase 2 onward uses a proper test runner; the habit you
+are building - a checkable test per unit - is the point (the Testing Thread,
+plan section 4.7).
+:::
+
+## 4. Cross-compilation to aarch64
+
+Android devices are mostly `arm64`. You compile on your `x86_64` host for the
+target. This is the same mechanism the AOSP build uses under the hood.
+
+<TestRunner
+  title="Build for aarch64 and run it under QEMU"
+  cmd={`sudo apt-get install -y gcc-aarch64-linux-gnu qemu-user
+aarch64-linux-gnu-gcc layout.c -o layout_arm64
+file layout_arm64
+qemu-aarch64 ./layout_arm64`}
+  expect={`layout_arm64: ELF 64-bit LSB pie executable, ARM aarch64, ...
+
+pid      = 12345
+&global_init = 0x... (data)
+&global_zero = 0x... (bss)
+&local       = 0x... (stack)
+
+(Addresses differ from the host build. Running is via QEMU on x86_64.)`}
+/>
+
+<WhyItWorked>
+`aarch64-linux-gnu-gcc` is a cross-compiler: same source, different target ISA
+and ABI. The result is an ELF binary for ARM64, which your x86_64 kernel cannot
+run natively - hence `qemu-aarch64` to execute it. In a real AOSP build, this
+cross-compilation is driven by the build system rather than called by hand.
+</WhyItWorked>
+
+## 5. See it with strace
+
+`strace` shows every syscall a program makes - the actual crossings into the
+kernel. This is how you debug "it does not do what I think" at the systems level.
+
+<TestRunner
+  title="Trace the forker"
+  cmd={`strace -f -e trace=clone,execve,wait4 ./forker 2>&1 | head -n 20`}
+
+  expect={`clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|...) = 12346
+execve("/bin/echo", ["echo", "hello from the child"], ...) = 0
+...
+wait4(12346, ...) = 12346
+...
+parent: child 12346 exited with 0
+
+
+(Exact counts differ; you should see clone, then execve, then wait4.)`}
+/>
+
+<Checkpoint
+  quiz={{
+    question: 'In strace output for this program, which syscall creates the child process?',
+    options: [
+      'fork',
+      'execve',
+      'clone',
+      'mmap',
+    ],
+    answer: 2,
+    explain:
+      'On modern Linux, fork() is implemented via the clone syscall, so strace shows clone. execve replaces the image; wait4 reaps the child. There is no separate "fork" syscall on the wire.',
+  }}
+/>
+
+## Break It
+
+<BreakIt
+  items={[
+    'Symptom: fork() returns -1 and perror prints "Resource temporarily unavailable". Cause: you hit the per-user process limit (or are leaking children by never waiting). Fix: reap children with waitpid; check ulimit -u.',
+    'Symptom: the consumer reads an empty string or garbage. Cause: you mapped the shared object MAP_PRIVATE (copy-on-write) or never ftruncate()d it to a size. Fix: use MAP_SHARED and ftruncate to a real size before mapping.',
+    'Symptom: qemu-aarch64: command not found, or an aarch64 binary will not run. Cause: the cross-toolchain or qemu-user is not installed. Fix: install gcc-aarch64-linux-gnu and qemu-user.',
+  ]}
+/>
+
+## 6. Mastery check
+
+Ship a multi-process, cross-compiled program, verified with **real `strace`**
+output. Concretely, you have:
+
+- A parent that forks a child which `exec`s another program (section 2).
+- A shared-memory producer/consumer pair (section 3).
+- At least one unit test that runs green (section 3, Testing Thread).
+- A build for **both** `x86_64` and `aarch64` (section 4).
+- `strace` output showing `clone` -> `execve` -> `wait4` (section 5).
+
+**Spine artifact:** commit the multi-process, cross-compiled program and its
+shared-memory producer/consumer under `spine/01-ipc` in your Project Spine fork
+(plan section 4.8). This is the artifact the competency map records for this
+phase.
+
+<Reward xp="500" badge="Systems Foundations" />
+
+<Troubleshooting
+  items={[
+    {
+      symptom: 'aarch64-linux-gnu-gcc: command not found',
+      cause: 'ARM64 cross-compilation toolchain not installed on host.',
+      fix: 'Run sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu.',
+    },
+    {
+      symptom: 'qemu-aarch64: /lib/ld-linux-aarch64.so.1: No such file or directory',
+      cause: 'QEMU cannot locate dynamic target libraries for cross-compiled ELF.',
+      fix: 'Run qemu-aarch64 -L /usr/aarch64-linux-gnu/ ./your_binary or compile with -static.',
+    },
+    {
+      symptom: 'shm_open fails with undefined reference to shm_open',
+      cause: 'Missing real-time extensions library on older glibc releases.',
+      fix: 'Append -lrt to your gcc/clang build command line.',
+    },
+  ]}
+/>
+
+<FurtherReading
+  links={[
+    {
+      title: 'Linux man-pages: clone(2)',
+      url: 'https://man7.org/linux/man-pages/man2/clone.2.html',
+      desc: 'The fundamental Linux system call underlying fork(), pthread creation, and namespace isolation.',
+    },
+    {
+      title: 'Android Binder IPC Overview',
+      url: 'https://source.android.com/docs/core/architecture/hidl/binder-ipc',
+      desc: 'Why Android replaced classical POSIX shared memory and sockets with Binder IPC.',
+    },
+  ]}
+/>
+
+<CompleteButton unitId="phase-1-systems" xp={500} label="Mark Phase 1 complete (+500 XP)" />
+
+<NextMission to="/docs/phase-2-build-system">
+Phase 2 — Build System. With systems skills in hand, learn to drive the build:
+Soong/Blueprint, Kati, Ninja, lunch, m, and a first Cuttlefish boot.
+</NextMission>

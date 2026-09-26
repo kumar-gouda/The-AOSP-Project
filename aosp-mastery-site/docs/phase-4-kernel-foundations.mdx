@@ -1,0 +1,276 @@
+---
+id: phase-4-kernel-foundations
+title: Phase 4 - Kernel Foundations
+sidebar_position: 6
+---
+
+import {
+  Hook,
+  Outcome,
+  Prereqs,
+  DoThis,
+  WhyItWorked,
+  BreakIt,
+  Checkpoint,
+  Reward,
+  NextMission,
+  ArchitectureDiagram,
+  Troubleshooting,
+  FurtherReading,
+} from '@site/src/components/Unit';
+import {PhaseHeader} from '@site/src/components/PhaseHeader';
+import {CompleteButton} from '@site/src/components/Progress';
+import {TestRunner} from '@site/src/components/TestRunner';
+
+# Phase 4 - Kernel Foundations
+
+<PhaseHeader tier="Engineer" time={6} difficulty="advanced" />
+
+<ArchitectureDiagram highlight="kernel" />
+
+<Hook>
+Meet the thing everything else stands on - just enough to keep moving.
+</Hook>
+
+<Outcome>
+You build the **GKI** (Generic Kernel Image) with **Kleaf**, boot it unmodified
+on Cuttlefish, and can explain what the **KMI** is and why a Pixel kernel is not
+rebuilt for every Android release. You also read the Binder driver's wait/wake
+pattern in the source - the kernel half of the IPC story that recurs through the
+rest of the course.
+</Outcome>
+
+<Prereqs
+  interactive
+  items={[
+    'Phase 3 complete: you can read dmesg and logcat, and boot Cuttlefish.',
+    'Phase 1 Track B: comfortable reading C, pointers, and kernel idioms.',
+    'Tools for the ACK/Kleaf workflow (the docs list them; repo and a working AOSP tree help).',
+  ]}
+/>
+
+:::note Honest status of this page
+Authored against a 64-bit Linux target. Output blocks are marked **expected
+(author-run pending)** where not yet captured on a reference machine. Per this
+project's rule, output is shown verbatim once captured - never paraphrased.
+:::
+
+## 1. GKI and the KMI, in one breath
+
+Before Android 11-era changes, every device shipped a different kernel fork -
+a maintenance nightmare. **GKI** fixes that: **one** Android Common Kernel (ACK)
+binary, with a **stable KMI** (Kernel Module Interface), plus **loadable vendor
+modules** for device-specific hardware.
+
+| Term | Meaning |
+|------|---------|
+| **ACK** | Android Common Kernel - the shared upstream-based kernel source. |
+| **GKI** | The single, prebuilt kernel image most devices boot. |
+| **KMI** | The *stable* set of exported symbols/ABI vendor modules may rely on. |
+| **Vendor modules** | Device-specific `.ko` modules, built separately, loaded into GKI. |
+
+<WhyItWorked>
+Because the KMI is stable, Google can ship one tested kernel to many devices.
+Vendors write modules against that stable interface instead of forking the
+kernel. That is why a Pixel kernel is not rebuilt for each Android release: the
+Android release changes userspace/framework, while the GKI (with its stable KMI)
+stays put across those releases.
+</WhyItWorked>
+
+<Checkpoint
+  quiz={{
+    question: 'Why is a Pixel kernel not rebuilt for every Android release?',
+    options: [
+      'Pixels cannot load kernel modules.',
+      'The GKI provides one kernel with a stable KMI; the Android release changes userspace, so the same GKI keeps working.',
+      'The kernel is recompiled by the client device at boot.',
+      'Google freezes all kernel development.',
+    ],
+    answer: 1,
+    explain:
+      'GKI = one kernel binary + a stable KMI + loadable vendor modules. The Android release updates the framework; the stable KMI means the same GKI can back multiple releases.',
+  }}
+/>
+
+## 2. Get the ACK source
+
+The kernel you build comes from the **ACK** repository via `repo`, separate from
+the platform manifest. The current GKI release train is `android17-6.18`
+(kernel 6.18) per the GKI release builds page.
+
+<TestRunner
+  title="Sync the Android Common Kernel"
+  cmd={`mkdir ack && cd ack
+repo init -u https://android.googlesource.com/kernel/manifest -b common-android17-6.18
+repo sync -j8`}
+  expect={`repo initialized in .../ack
+(...syncing kernel projects...)
+Syncing work tree: 100% ...
+Done.
+
+(The branch common-android17-6.18 tracks the 6.18 GKI release train. Confirm the
+current train on the GKI release builds page before you start.)`}
+/>
+
+:::warning Branches move; verify the train
+The exact GKI branch name is versioned and changes over time. `android17-6.18`
+matches the plan's verified table, but always confirm the current train on
+source.android.com (GKI release builds) and pin deliberately (plan section 12,
+refresh policy).
+:::
+
+## 3. Build GKI with Kleaf
+
+**Kleaf** is the Bazel-based kernel build system. You build the GKI from the ACK
+tree with its documented entry point.
+
+<TestRunner
+  title="Build the GKI (Kleaf)"
+  cmd={`cd ack
+tools/bazel run //common:kernel_aarch64_dist`}
+  expect={`... (Bazel starts, analyses, builds targets) ...
+Target //common:kernel_aarch64_dist up-to-date:
+  bazel-bin/common/kernel_aarch64_dist/image
+...
+(artifacts land under bazel-bin/.../kernel_aarch64_dist/)
+
+(The first Kleaf build is heavy. Later builds reuse Bazel's cache. The exact
+target name follows the Kleaf docs for your tree.)`}
+/>
+
+<WhyItWorked>
+Kleaf replaces the old build scripts with a reproducible Bazel build. The
+`*_dist` target produces the bootable kernel image plus the module set - exactly
+what Cuttlefish (or a device) consumes. You built the **unmodified** GKI: the
+whole point is that it boots as shipped, without vendor patches.
+</WhyItWorked>
+
+## 4. Boot the GKI on Cuttlefish
+
+Rebuild the Cuttlefish images with your kernel (or use the prebuilt GKI the
+platform expects) and boot. In practice you either point the platform build at
+your kernel artifacts, or run the GKI as-is on the virtual device.
+
+<TestRunner
+  title="Boot Cuttlefish and confirm the kernel"
+  cmd={`adb shell uname -a
+adb shell cat /proc/version`}
+  expect={`Linux localhost 6.18.x-android... #1 SMP PREEMPT ...
+Linux version 6.18.x-android... (the kernel banner you built)
+
+(uname reports the kernel release; it should match the 6.18 GKI train you built.)`}
+/>
+
+<Checkpoint
+  quiz={{
+    question: 'What does Kleaf produce that Cuttlefish consumes?',
+    options: [
+      'A Java framework image.',
+      'A bootable kernel image plus its module set (the *_dist artifacts).',
+      'An APK bundle.',
+      'A device tree overlay only.',
+    ],
+    answer: 1,
+    explain:
+      'Kleaf builds the kernel and modules; the *_dist target collects the bootable kernel image and modules that the device (or Cuttlefish) boots.',
+  }}
+/>
+
+## 5. Read the Binder driver: wait/wake
+
+Binder is Android's IPC. In the kernel it lives in the `binder` driver under the
+ACK tree (`drivers/android/binder.c`). You are not writing it here - you are
+**reading** the wait/wake pattern: a thread that blocks waiting for work, and
+the wakeup that hands it a transaction. This is the kernel half of the IPC you
+met at the language level in Phase 1.
+
+Do this: locate and read the relevant functions in the driver source.
+
+<TestRunner
+  title="Find the Binder wait/wake code in the ACK tree"
+  cmd={`cd ack
+grep -n "binder_wait_for_work\\|wake_up_interruptible\\|wait_event_interruptible" \\
+  common/drivers/android/binder.c | head -n 15`}
+  expect={`...binder_wait_for_work(...) ...
+...wake_up_interruptible(...) ...
+...(the lines where a waiting thread is woken with pending work)...
+
+(A waiting Binder thread sleeps until another process posts a transaction; the
+driver wakes it. That sleep/wake is the mechanism underneath every Binder call.)`}
+/>
+
+<WhyItWorked>
+A Binder call looks synchronous to the caller, but underneath, a worker thread
+**waits** on a queue and is **woken** when a transaction arrives. Seeing the
+`wait`/`wake_up` pair in `binder.c` connects the high-level "IPC" idea to the
+kernel primitive that implements it - the same idea recurs in Phase 6 and 7
+(spiral A-4).
+</WhyItWorked>
+
+## Break It
+
+<BreakIt
+  items={[
+    'Symptom: the Kleaf build fails immediately with a toolchain or workspace error. Cause: missing Bazel/toolchain prerequisites or the wrong tree branch. Fix: check the Kleaf docs for the required host tools and confirm you synced the correct common-android## release branch.',
+    'Symptom: the booted kernel version does not match what you built. Cause: the platform build is still using its own prebuilt GKI, not your artifacts. Fix: confirm how your product picks the kernel (prebuilt vs. built) and point it at your dist output.',
+    'Symptom: adb shell uname shows a much older kernel. Cause: the device did not reboot into the new images, or you never flashed/updated them. Fix: reboot Cuttlefish so it boots the images you built.',
+  ]}
+/>
+
+## 6. Mastery check
+
+Explain **GKI and the KMI**, and why a Pixel kernel is not rebuilt for every
+Android release - supported by your own results. Concretely, you have:
+
+- Synced the ACK and built the **unmodified GKI** with Kleaf (sections 2-3).
+- Booted it on Cuttlefish and shown the kernel version via `uname` (section 4).
+- Read the Binder driver's wait/wake pair in `binder.c` (section 5).
+- A clear spoken/written explanation of GKI, the stable KMI, and vendor modules.
+
+**Spine artifact:** commit your ACK build configuration and the `uname` proof
+under `spine/04-gki` in your Project Spine fork (plan section 4.8). This is the
+artifact the competency map records for this phase.
+
+<Reward xp="500" badge="GKI Builder" />
+
+<Troubleshooting
+  items={[
+    {
+      symptom: 'tools/bazel: command not found or python module missing',
+      cause: 'Host environment missing dependencies required by Kleaf prebuilts.',
+      fix: 'Install required packages: sudo apt-get install -y python3 libssl-dev flex bison.',
+    },
+    {
+      symptom: 'launch_cvd: unrecognized flag --kernel_path',
+      cause: 'Cuttlefish host tools out of date or syntax version difference.',
+      fix: 'Check cvd launch flags with launch_cvd --help or use --kernel_image_dir pointing to dist/.',
+    },
+    {
+      symptom: 'insmod: ERROR: could not insert module: Invalid module format',
+      cause: 'Kernel Module Interface (KMI) symbol mismatch between kernel binary and module.',
+      fix: 'Recompile the out-of-tree module using the exact Module.symvers generated by your GKI build.',
+    },
+  ]}
+/>
+
+<FurtherReading
+  links={[
+    {
+      title: 'Android Generic Kernel Image (GKI) Overview',
+      url: 'https://source.android.com/docs/core/architecture/kernel/generic-kernel-image',
+      desc: 'Architecture of unified kernel images, KMI stability, and modular vendor driver delivery.',
+    },
+    {
+      title: 'Building Android Kernels with Kleaf',
+      url: 'https://source.android.com/docs/setup/build/building-kernels',
+      desc: 'Step-by-step guide to Bazel-based kernel compilation and artifact distribution.',
+    },
+  ]}
+/>
+
+<CompleteButton unitId="phase-4-kernel-foundations" xp={500} label="Mark Phase 4 complete (+500 XP)" />
+
+<NextMission to="/docs/phase-5-native-runtime">
+Phase 5 — Native Userspace & Runtime. Build a native daemon that starts at
+first boot, trace Zygote and ART, run an atest, and gain Rust literacy.
+</NextMission>

@@ -1,0 +1,267 @@
+# AOSP Mastery - Competency Map
+#
+# The single source of truth (plan section 9). Everything else references this
+# file: the skill tree, the XP logic, and the capstone grader.
+#
+# Schema (per plan section 9):
+#   id            stable machine id ("<phase>.<slug>")
+#   title         human readable
+#   proves        list of skills this competency demonstrates
+#   artifact      the Project Spine artifact produced (plan section 4.8)
+#   testing       the testing-thread expectation at this layer (plan section 4.7)
+#   masteredWhen  the observable, checkable bar
+#   tier          the highest tier this competency contributes to (plan section 4.9)
+#
+# Tiers (plan section 4.9): Recruit < Builder < Engineer < Architect < Master
+#
+# NOTE: content mirrors plan sections 4.7, 4.8, 4.9 and 6.1 in intent.
+# No phase, skill, or artifact is invented here.
+
+version: 1
+verifiedAgainst: android17
+tiers: [Recruit, Builder, Engineer, Architect, Master]
+
+phases:
+  - id: p-1.foundation
+    title: Foundation (C++17 + systems-C)
+    spinePhase: "-1"
+    competencies:
+      - id: p-1.cpp17
+        title: C++17 for AOSP userspace
+        proves: [RAII, smart-pointers, move-semantics, const-correctness, optional-variant-string_view, sp-wp, error-as-return-value]
+        artifact: "spine/00-cpp17-lib"
+        testing: GTest/GMock fundamentals
+        masteredWhen: a tested, memory-safe C++17 library builds and its GTest suite passes
+        tier: Builder
+      - id: p-1.systemsc
+        title: Systems-C for kernel work
+        proves: [pointer-arithmetic, volatile, alignment, endianness, container_of, ERR_PTR-IS_ERR, kernel-locking, ELF-ABI, readelf-objdump-nm, aarch64-cross-compile]
+        artifact: "spine/00-abi-probe"
+        testing: hand-written C program inspected with objdump
+        masteredWhen: a C program prints its own ABI details via objdump
+        tier: Builder
+
+  - id: p0.basecamp
+    title: Basecamp (verified environment gate)
+    spinePhase: "0"
+    competencies:
+      - id: p0.gate
+        title: Hardware/OS build gate
+        proves: [disk-400gb, ram-64gb, 64-bit-linux, glibc-2.17, repo-launcher-2.4]
+        artifact: "spine/00-cli"
+        testing: self-check script passes every line
+        masteredWhen: the section 5.1 self-check passes on the learner's machine
+        tier: Recruit
+      - id: p0.tree
+        title: AOSP tree navigation
+        proves: [frameworks, system, hardware, device, kernel, packages, cs.android.com]
+        artifact: "spine/00-cli"
+        testing: not-yet (Testing Thread begins in Phase -1/1)
+        masteredWhen: given a feature, the learner points to where it lives, unaided
+        tier: Recruit
+
+  - id: p1.systems
+    title: Systems Foundations
+    spinePhase: "1"
+    competencies:
+      - id: p1.ipc
+        title: Process IPC
+        proves: [pipes, shared-memory, signals, fork-exec]
+        artifact: "spine/01-ipc"
+        testing: unit tested
+        masteredWhen: strace shows the intended syscalls
+        tier: Builder
+      - id: p1.cross
+        title: Cross-compilation to ARM
+        proves: [toolchain, target-triple, static-vs-dynamic, strace]
+        artifact: "spine/01-ipc"
+        testing: unit tested
+        masteredWhen: the multi-process program is cross-compiled and run, verified with strace
+        tier: Builder
+
+  - id: p2.build
+    title: Build System
+    spinePhase: "2"
+    competencies:
+      - id: p2.soong
+        title: repo + Soong + Ninja
+        proves: [repo-manifest, blueprint-bp, kati, ninja, incremental-build]
+        artifact: "spine/02-instrumentation"
+        testing: unit tested
+        masteredWhen: a clean build boots on Cuttlefish, unaided
+        tier: Builder
+
+  - id: p3.boot
+    title: Boot and Init
+    spinePhase: "3"
+    competencies:
+      - id: p3.init
+        title: Boot chain and init
+        proves: [bootloader, boot-image, init, zygote, system_server, init.rc]
+        artifact: "spine/03-init-service"
+        testing: unit tested
+        masteredWhen: the learner narrates the boot chain against real log lines
+        tier: Builder
+
+  - id: p4.kernel-foundations
+    title: Kernel Foundations
+    spinePhase: "4"
+    competencies:
+      - id: p4.gki
+        title: GKI build and KMI
+        proves: [kleaf, ack, gki, kmi, binder-driver-wait-wake]
+        artifact: "spine/04-gki"
+        testing: kselftest (introduced)
+        masteredWhen: GKI builds and boots on Cuttlefish; the learner explains GKI and the KMI
+        tier: Engineer
+
+  - id: p5.native-runtime
+    title: Native Userspace and Runtime
+    spinePhase: "5"
+    competencies:
+      - id: p5.native
+        title: Native daemon and runtime
+        proves: [bionic, ndk, zygote-fork, art-basics, boot-launch]
+        artifact: "spine/05-ndk-daemon"
+        testing: atest basics; run one host test
+        masteredWhen: a native daemon runs from first boot with no manual step
+        tier: Engineer
+      - id: p5.rust
+        title: Rust literacy (read-only)
+        proves: [rust-modules, rust-binaries, rust-tests]
+        artifact: "spine/05-ndk-daemon"
+        testing: not-yet (literacy only - enough not to be blocked)
+        masteredWhen: the learner can read Rust files in the tree without being blocked
+        tier: Engineer
+
+  - id: p6.hal-binder
+    title: HAL, Treble and Binder
+    spinePhase: "6"
+    competencies:
+      - id: p6.hal
+        title: AIDL HAL and Binder
+        proves: [aidl-hal, vintf, service-manager, binder-transactions]
+        artifact: "spine/06-aidl-hal"
+        testing: VTS test for your own HAL
+        masteredWhen: the HAL is callable end-to-end, returns a correct value, with a passing VTS test
+        tier: Engineer
+
+  - id: p7.framework
+    title: Framework Layer
+    spinePhase: "7"
+    competencies:
+      - id: p7.service
+        title: SystemService pattern
+        proves: [system_server, systemservice, app-facing-aidl]
+        artifact: "spine/07-systemservice"
+        testing: system-side unit test (atest on a framework module)
+        masteredWhen: kernel/HAL work is callable as a normal Android API from an app
+        tier: Engineer
+
+  - id: p8.security
+    title: Security Model
+    spinePhase: "8"
+    competencies:
+      - id: p8.selinux
+        title: SELinux, permissions, Verified Boot
+        proves: [selinux-policy, contexts, permissions, keystore, verified-boot]
+        artifact: "spine/08-selinux"
+        testing: SELinux test components via CTS
+        masteredWhen: the service runs cleanly under enforcing
+        tier: Engineer
+
+  - id: p9.debugging
+    title: Debugging and Performance
+    spinePhase: "9"
+    competencies:
+      - id: p9.debug
+        title: On-device diagnosis
+        proves: [adb, tombstones, perfetto, ftrace, seeded-bug-diagnosis]
+        artifact: "spine/09-seeded-bug"
+        testing: diagnose three seeded bugs with on-device tools only
+        masteredWhen: three seeded bugs are diagnosed with on-device tools alone
+        tier: Engineer
+
+  - id: p10.kernel-mastery
+    title: Kernel Mastery
+    spinePhase: "10"
+    competencies:
+      - id: p10.module
+        title: Kernel modules and /proc
+        proves: [loadable-module, proc-interface, dmesg-ftrace]
+        artifact: "spine/10-kmod"
+        testing: kselftest, KUnit
+        masteredWhen: a module produces a userspace-observable effect, diagnosed with kernel tools alone
+        tier: Architect
+
+  - id: p10_5.drivers
+    title: Kernel Subsystems and Drivers
+    spinePhase: "10.5"
+    competencies:
+      - id: p10_5.driver
+        title: Char/IIO driver and device tree
+        proves: [char-device, iio, read-write-ioctl-poll, device-tree-binding, probe]
+        artifact: "spine/10.5-driver"
+        testing: kselftest and a KUnit test
+        masteredWhen: a driver bound via device tree is observable from userspace, covered by a passing kernel test
+        tier: Architect
+
+  - id: p11.real-device
+    title: Real Device Fundamentals
+    spinePhase: "11"
+    competencies:
+      - id: p11.partitions
+        title: Real partitions, A/B slots, Treble
+        proves: [cuttlefish-vs-pixel, partition-layout, ab-slots, unlock-semantics]
+        artifact: "spine/11-image-analysis"
+        testing: reasoning check against a public factory image set
+        masteredWhen: given a device image set, the learner says what breaks if one is flashed to the wrong slot
+        tier: Architect
+
+  - id: p12.pixel
+    title: Pixel Bring-Up Workshop (elective)
+    spinePhase: "12"
+    competencies:
+      - id: p12.bringup
+        title: Build, flash, boot on a Pixel
+        proves: [device-google-tree, vendor-binaries, lunch-aosp_husky, flashall, unlock]
+        artifact: "spine/12-pixel"
+        testing: not-yet (hardware bring-up; risks documented)
+        masteredWhen: a self-built image boots on the learner's own Pixel
+        tier: Master
+
+  - id: p13.production
+    title: Production Readiness
+    spinePhase: "13"
+    competencies:
+      - id: p13.extras
+        title: Rust, APEX, Camera HAL, Trade Federation
+        proves: [rust-in-aosp, apex, mainline, graphics-overview, camera-hal-overview, trade-federation]
+        artifact: "spine/13-hardening"
+        testing: Trade Federation / host-driven test module
+        masteredWhen: given the capstone feature, the learner names every subsystem it touches in a real ship
+        tier: Architect
+
+  - id: p14.contribution
+    title: Contribution Workflow
+    spinePhase: "14"
+    competencies:
+      - id: p14.gerrit
+        title: Gerrit flow and patch etiquette
+        proves: [patch-format, upload, self-review, gerrit-conventions, cs.android.com]
+        artifact: "spine/14-patch-series"
+        testing: not-yet (review-driven)
+        masteredWhen: a patch passes a real reviewer's checklist
+        tier: Architect
+
+  - id: p15.capstone
+    title: Capstone
+    spinePhase: "15"
+    competencies:
+      - id: p15.prove
+        title: Full-stack feature, tested, on a public fork
+        proves: [full-stack-feature, cts-vts-subset, public-fork, peer-review]
+        artifact: "spine/15-full"
+        testing: passing a defined CTS/VTS subset
+        masteredWhen: graded against the Phase 0 competency doc by a reviewer; fork makes it verifiable (plan section 21.3)
+        tier: Architect

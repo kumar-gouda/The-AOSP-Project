@@ -1,0 +1,35 @@
+.completeButton {
+  margin: 1rem 0;
+}
+
+.panel {
+  border: 1px solid var(--ifm-color-emphasis-300);
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  margin: 1.5rem 0;
+  background: var(--ifm-background-surface-color);
+}
+
+.stats {
+  display: flex;
+  gap: 1.5rem;
+  font-size: 1.05rem;
+  margin-bottom: 0.75rem;
+}
+
+.stat strong {
+  color: var(--ifm-color-primary);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.message {
+  margin: 0.75rem 0 0;
+  font-size: 0.9rem;
+  color: var(--ifm-color-emphasis-700);
+}

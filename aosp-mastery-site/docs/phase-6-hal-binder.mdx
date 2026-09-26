@@ -1,0 +1,292 @@
+---
+id: phase-6-hal-binder
+title: Phase 6 - HAL, Treble & Binder
+sidebar_position: 8
+---
+
+import {
+  Hook,
+  Outcome,
+  Prereqs,
+  DoThis,
+  WhyItWorked,
+  BreakIt,
+  Checkpoint,
+  Reward,
+  NextMission,
+  ArchitectureDiagram,
+  Troubleshooting,
+  FurtherReading,
+} from '@site/src/components/Unit';
+import {PhaseHeader} from '@site/src/components/PhaseHeader';
+import {CompleteButton} from '@site/src/components/Progress';
+import {TestRunner} from '@site/src/components/TestRunner';
+
+# Phase 6 - HAL, Treble & Binder
+
+<PhaseHeader tier="Engineer" time={6} difficulty="advanced" />
+
+<ArchitectureDiagram highlight="hal" />
+
+<Hook>
+Where hardware and software shake hands.
+</Hook>
+
+<Outcome>
+A minimal **AIDL HAL** - your daemon from Phase 5, now behind a stable
+interface - registered with the **service manager**, called end-to-end by a
+**native client**, traced as **Binder transactions**, and covered by a **VTS
+test** you wrote. The HAL returns a correct value and the test passes.
+</Outcome>
+
+<Prereqs
+  interactive
+  items={[
+    'Phase 5 complete: you have a native daemon that starts at boot.',
+    'Phase 3 complete: comfortable with init.rc services and logcat.',
+    'Phase 4 complete: you have read the Binder driver wait/wake code.',
+  ]}
+/>
+
+:::note Honest status of this page
+Authored against a 64-bit Linux target. Output blocks are marked **expected
+(author-run pending)** where not yet captured on a reference machine. Per this
+project's rule, output is shown verbatim once captured - never paraphrased.
+:::
+
+## 1. Treble: why HALs look the way they do
+
+Before Project **Treble**, the Android framework and the vendor hardware code
+were tangled; a framework update meant a vendor update. Treble split them with a
+**stable interface** (originally HIDL, now **AIDL**) and the **VINTF** (Vendor
+Interface) mechanism that declares which interfaces exist and match.
+
+| Concept | Role |
+|---------|------|
+| **HAL** | A service that exposes a hardware capability behind a stable interface. |
+| **AIDL** | The interface definition language used for modern HALs (and framework IPC). |
+| **VINTF** | The manifests that declare which HAL interfaces a vendor and framework provide/require, and whether they match. |
+| **VTS** | Vendor Test Suite - tests that a HAL honours its declared interface. |
+
+<WhyItWorked>
+The stable interface is the contract. The framework calls the AIDL interface; it
+does not care how the vendor implements it. VINTF records the contract so the
+system can refuse to boot a mismatched vendor/framework pair, and VTS checks the
+implementation actually behaves. This is the same stability idea as the GKI's
+KMI (Phase 4), applied to hardware interfaces.
+</WhyItWorked>
+
+## 2. Define the AIDL interface
+
+An AIDL HAL starts with an `.aidl` file that declares the interface. Here is a
+minimal one - a single method returning a value from your daemon's domain.
+
+```text
+// IFoo.aidl - minimal HAL interface
+package android.hardware.foo;
+
+@VintfStability
+interface IFoo {
+    // Returns a value computed by the HAL implementation.
+    int getVersion();
+    // A trivial callable method that returns a string.
+    String hello();
+}
+```
+
+<WhyItWorked>
+`@VintfStability` marks the interface as a stable VINTF interface - the promise
+that it will not change incompatibly. That annotation is what lets the framework
+and vendor agree on the ABI. A HAL is just an AIDL interface plus an
+implementation and a manifest entry.
+</WhyItWorked>
+
+## 3. Implement the HAL and register it
+
+Write the implementation in C++ (or Rust, later), build it as a service, and
+**register it with the service manager** on startup. The service manager is the
+name registry every process uses to find Binder services.
+
+<TestRunner
+  title="Register the HAL service"
+  cmd={`# after building and pushing the service, it registers itself on startup
+adb shell /system/bin/vendor.foo-service &
+adb shell service list | grep foo
+adb shell dumpsys -l | grep foo`}
+  expect={`... android.hardware.foo.IFoo/default ...
+... foo service is running ...
+
+(The HAL appears in the service list under its interface name after it calls
+addService on the service manager.)`}
+/>
+
+<DoThis
+  steps={[
+    'Implement the AIDL interface in C++, on top of your Phase 5 daemon.',
+    'On startup, register with the service manager (addService) under the interface name.',
+    'Declare the HAL in your VINTF manifest so the system knows it exists.',
+    'Build, push, and reboot - confirm it appears in `service list`.',
+  ]}
+/>
+
+## 4. Call it from a native client
+
+A native client finds the service by name through the service manager, gets a
+Binder proxy, and calls the method. This is the end-to-end path the mastery
+check asks for.
+
+<TestRunner
+  title="Native client call"
+  cmd={`adb shell foo_client`}
+  expect={`hello from IFoo, version=1
+
+(The client resolved android.hardware.foo.IFoo/default via the service manager,
+got a proxy, and called hello() over Binder - a cross-process call.)`}
+/>
+
+<WhyItWorked>
+The call crosses a process boundary, but the AIDL proxy makes it look like a
+local method. Under the hood, Binder marshals the arguments, the kernel driver
+delivers them to the HAL process, and the result travels back. You saw the
+kernel half of this in Phase 4 (`binder.c` wait/wake).
+</WhyItWorked>
+
+## 5. Trace the Binder transactions
+
+Binder is transparent by default; `dumpsys` and logcat let you see it working.
+This is the "Binder trace" the phase calls for.
+
+<TestRunner
+  title="Observe Binder transactions"
+  cmd={`adb shell dumpsys activity services | grep -i foo
+adb logcat -b all -d | grep -iE "binder|foo" | tail -n 15`}
+  expect={`... ServiceRecord{... android.hardware.foo.IFoo/default ...} ...
+... Binder:... transaction ... 
+...
+
+(The service is registered and its Binder transactions are visible in the logs
+and dumpsys output.)`}
+/>
+
+<Checkpoint
+  quiz={{
+    question: 'What does the VINTF mechanism guarantee?',
+    options: [
+      'That the kernel is always up to date.',
+      'That the framework and vendor declare which HAL interfaces they provide/require, so a mismatch is caught instead of failing at runtime.',
+      'That HALs are written in Rust.',
+      'That the device always boots.',
+    ],
+    answer: 1,
+    explain:
+      'VINTF manifests record the provided/required interfaces and their versions. The system checks them so an incompatible vendor/framework pair is rejected up front, not at a random call.',
+  }}
+/>
+
+## 6. Write a VTS test for your own HAL
+
+The testing requirement for this phase: a **VTS test** that calls your HAL and
+asserts a correct result. VTS tests live under `test/vts-testcase/hal/` and use
+the same GTest-style harness you have used since Phase 1.
+
+```cpp
+// A minimal VTS-style test of your HAL.
+#include <gtest/gtest.h>
+#include "android/hardware/foo/IFoo.h"
+
+using android::hardware::foo::IFoo;
+
+TEST(FooHalTest, HelloReturnsValue) {
+  auto foo = IFoo::getService();
+  ASSERT_NE(foo, nullptr) << "HAL not registered";
+  // AIDL call; adapt to your generated proxy API.
+  EXPECT_EQ(foo->getVersion(), 1);
+}
+```
+
+<TestRunner
+  title="Run your VTS test"
+  cmd={`atest FooHalTest`}
+  expect={`... (atest builds and runs the HAL test on the device) ...
+[  PASSED  ] 1 test.
+...
+(atest runs the VTS test against your running HAL. Green here is the phase's
+testing bar.)`}
+/>
+
+<WhyItWorked>
+A VTS test is not a unit test of your C++ helpers - it is a test **across the
+interface**: it finds the registered HAL and calls it exactly as the framework
+would. If it passes, your HAL is genuinely callable, not just internally
+correct. That is why VTS, not unit tests alone, is the bar for this phase.
+</WhyItWorked>
+
+## Break It
+
+<BreakIt
+  items={[
+    'Symptom: the client cannot find the service (getService returns null). Cause: the HAL did not register, or registered under a different interface name. Fix: check service list and the addService call; verify the VINTF manifest name matches.',
+    'Symptom: the device will not boot after adding the HAL, or complains about an interface mismatch. Cause: the VINTF manifest requires an interface the vendor does not provide (or a version mismatch). Fix: align the framework and vendor manifests; check dmesg/logcat for VINTF errors.',
+    'Symptom: the VTS test fails to build because it cannot include the AIDL headers. Cause: the test module does not depend on the generated HAL library. Fix: add the AIDL interface library to the test module dependencies in its Android.bp.',
+  ]}
+/>
+
+## 7. Mastery check
+
+The bar is a **HAL callable end-to-end, returning a correct value, with a
+passing VTS test**. Concretely, you have:
+
+- Defined an AIDL interface and a VINTF-stable HAL (sections 2-3).
+- Registered it with the service manager and confirmed it in `service list` (section 3).
+- Called it from a native client across the Binder boundary (section 4).
+- Traced the Binder transactions (section 5).
+- Written and passed a **VTS test** for your HAL (section 6).
+
+**Spine artifact:** commit the `.aidl`, the HAL implementation, its VINTF
+manifest, and the VTS test under `spine/06-aidl-hal` in your Project Spine fork
+(plan section 4.8). This is the artifact the competency map records for this
+phase.
+
+<Reward xp="500" badge="HAL Integrator" />
+
+<Troubleshooting
+  items={[
+    {
+      symptom: 'service list does not show your registered HAL interface',
+      cause: 'servicemanager registration failed or SELinux prevented add_service call.',
+      fix: 'Inspect logcat -b main | grep -i servicemanager and dmesg | grep -i avc for audit denials.',
+    },
+    {
+      symptom: 'vts test fails: checkCompatibility: VINTF manifest mismatch',
+      cause: 'Device manifest.xml does not declare the exact AIDL package version.',
+      fix: 'Add the <hal format="aidl"> stanza with matching version to /vendor/etc/vintf/manifest.xml.',
+    },
+    {
+      symptom: 'AIDL compiler error: interface must be annotated with @VintfStability',
+      cause: 'Vendor HALs communicating across partitions require explicit VINTF stability mark.',
+      fix: 'Add @VintfStability immediately above the interface declaration in your .aidl file.',
+    },
+  ]}
+/>
+
+<FurtherReading
+  links={[
+    {
+      title: 'AIDL for Hardware Abstraction Layers',
+      url: 'https://source.android.com/docs/core/architecture/aidl/aidl-hals',
+      desc: 'Developing stable AIDL HALs, Treble interface versioning, and backend generation.',
+    },
+    {
+      title: 'Vendor Interface (VINTF) Object and Manifests',
+      url: 'https://source.android.com/docs/core/architecture/vintf',
+      desc: 'Device manifests, framework matrices, and boot-time compatibility verification.',
+    },
+  ]}
+/>
+
+<CompleteButton unitId="phase-6-hal-binder" xp={500} label="Mark Phase 6 complete (+500 XP)" />
+
+<NextMission to="/docs/phase-7-framework-layer">
+Phase 7 — Framework Layer. Wrap your HAL in a SystemService, expose it via
+app-facing AIDL, call it from an app, and cover it with a system-side test.
+</NextMission>

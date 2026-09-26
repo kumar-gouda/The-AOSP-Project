@@ -1,0 +1,283 @@
+---
+id: phase-7-framework-layer
+title: Phase 7 - Framework Layer
+sidebar_position: 9
+---
+
+import {
+  Hook,
+  Outcome,
+  Prereqs,
+  DoThis,
+  WhyItWorked,
+  BreakIt,
+  Checkpoint,
+  Reward,
+  NextMission,
+  ArchitectureDiagram,
+  Troubleshooting,
+  FurtherReading,
+} from '@site/src/components/Unit';
+import {PhaseHeader} from '@site/src/components/PhaseHeader';
+import {CompleteButton} from '@site/src/components/Progress';
+import {TestRunner} from '@site/src/components/TestRunner';
+
+# Phase 7 - Framework Layer
+
+<PhaseHeader tier="Engineer" time={5} difficulty="intermediate" />
+
+<ArchitectureDiagram highlight="framework" />
+
+<Hook>
+Where "Android the platform" actually lives.
+</Hook>
+
+<Outcome>
+A new **SystemService** registered inside `system_server`, exposing your Phase 6
+HAL through an **app-facing AIDL** interface, called successfully **from an app**
+- plus a **system-side unit test** that runs green under `atest`. Your
+kernel/HAL work is now a normal Android API.
+</Outcome>
+
+<Prereqs
+  interactive
+  items={[
+    'Phase 6 complete: you have an AIDL HAL, callable end-to-end and covered by a VTS test.',
+    'Phase 3 complete: comfortable with services and logcat.',
+    'Enough Java/Kotlin to read the framework (Phase 1 gave you the C++ side).',
+  ]}
+/>
+
+:::note Honest status of this page
+Authored against a 64-bit Linux target. Output blocks are marked **expected
+(author-run pending)** where not yet captured on a reference machine. Per this
+project's rule, output is shown verbatim once captured - never paraphrased.
+:::
+
+## 1. system_server: where platform services live
+
+`system_server` is the Java process that hosts the platform's core services
+(ActivityManager, PackageManager, and hundreds more). A **SystemService** is a
+class registered here so the rest of the system - and apps - can find it.
+
+```
+init -> zygote -> system_server -> { ActivityManagerService, ... your service }
+```
+
+<WhyItWorked>
+Apps cannot talk to your kernel or HAL directly. The pattern is always: a
+SystemService in `system_server` wraps the lower layer and exposes a **safe,
+permissioned** API. That indirection is deliberate - it is where permissions,
+policy, and lifecycle live. This phase completes the vertical slice: kernel →
+HAL → framework → app.
+</WhyItWorked>
+
+<Checkpoint
+  quiz={{
+    question: 'Why does an app call a SystemService rather than the HAL directly?',
+    options: [
+      'HALs cannot be called from userspace.',
+      'The SystemService is where permissions, policy, and lifecycle live; it wraps the lower layer behind a safe app-facing API.',
+      'SystemServices are faster.',
+      'Apps are not allowed to use Binder.',
+    ],
+    answer: 1,
+    explain:
+      'The SystemService is the mediation layer: it checks permissions and applies policy before reaching the HAL. That is why the app-facing API exists at all.',
+  }}
+/>
+
+## 2. Write the SystemService
+
+A SystemService is a class that extends the framework's service base and is
+registered with the `ServiceManager`. Here is the shape of a minimal one.
+
+```java
+// FooService.java - a minimal SystemService
+public class FooService extends SystemService {
+    public FooService(Context context) {
+        super(context);
+    }
+
+    @Override
+    public void onStart() {
+        // Publish so other processes can find it by name.
+        publishBinderService(Context.FOO_SERVICE, new FooImpl());
+    }
+
+    private final class FooImpl extends IFoo.Stub {
+        @Override
+        public int getVersion() {
+            return 1;
+        }
+    }
+}
+```
+
+<DoThis
+  steps={[
+    'Define the app-facing AIDL (IFoo.aidl) in a framework package.',
+    'Implement FooService and its Binder stub, delegating to your HAL where relevant.',
+    'Register it in SystemServer.startOtherServices() and add the context name.',
+    'Build, flash/reboot, and confirm the service is published.',
+  ]}
+/>
+
+<TestRunner
+  title="Confirm the service is published in system_server"
+  cmd={`adb shell service list | grep foo
+adb shell dumpsys foo`}
+  expect={`... foo: [android.framework.IFoo] ...
+... (dumpsys foo prints the service's state) ...
+
+(The service is reachable by name from every process once published.)`}
+/>
+
+<WhyItWorked>
+`publishBinderService` registers your stub with the service manager under a
+name. `system_server` runs as a privileged process, so it can hold the
+permissions your app-facing API requires - and apps then reach it through the
+normal Binder path you already understand from Phase 6.
+</WhyItWorked>
+
+## 3. Expose app-facing AIDL
+
+The interface your app calls is a **framework AIDL** - the same language as the
+HAL, but installed in a framework package and reachable by apps through the
+manager.
+
+```text
+// IFoo.aidl - framework-visible, app-facing
+package android.framework;
+
+interface IFoo {
+    int getVersion();
+}
+```
+
+## 4. Call it from an app
+
+From an app, get the service via the manager and call it. This closes the
+vertical slice: the value originated in your kernel/HAL work in Phases 4–6.
+
+<TestRunner
+  title="Call the service from an app"
+  cmd={`adb shell am start -n com.example.foodemo/.MainActivity
+adb logcat -d | grep FooDemo | tail -n 5`}
+  expect={`... FooDemo: version from service = 1
+...
+
+(The app resolved the SystemService, called getVersion() over Binder, and got
+the value your HAL produced - end to end.)`}
+/>
+
+<WhyItWorked>
+The app only knows the AIDL interface and the service name. Underneath: app →
+Binder → `system_server` (permission check) → your service → HAL → kernel. Every
+layer you built in Phases 4-6 is now behind one ordinary-looking API call.
+</WhyItWorked>
+
+## 5. Add a system-side unit test
+
+The phase's testing requirement: a **system-side unit test** run with `atest`.
+Framework services often split logic into a **core** class (plain Java, unit
+testable) separate from the Android-dependent shell - the same reason Phase 1
+kept logic out of `main`.
+
+```java
+// FooServiceCoreTest.java - a system-side unit test
+@RunWith(JUnit4.class)
+public class FooServiceCoreTest {
+    @Test
+    public void versionIsStable() {
+        FooServiceCore core = new FooServiceCore();
+        assertEquals(1, core.getVersion());
+    }
+}
+```
+
+<TestRunner
+  title="Run the system-side test"
+  cmd={`atest FooServiceCoreTest`}
+  expect={`... (atest builds and runs the framework test module) ...
+[  PASSED  ] 1 test.
+...
+(atest runs a system-side unit test on the framework module. Green here is the
+phase's testing bar.)`}
+/>
+
+<WhyItWorked>
+By keeping the *logic* in a plain-Java core class, you unit-test it fast without
+a device or `system_server`. The Binder service is then a thin shell around
+tested logic. This is the same separation-of-concerns you have practised since
+Phase 1, now inside the framework.
+</WhyItWorked>
+
+## Break It
+
+<BreakIt
+  items={[
+    'Symptom: the app cannot resolve the service (getService returns null). Cause: the service was not registered in SystemServer, or the context name is wrong. Fix: confirm the startOtherServices() call and the service list entry.',
+    'Symptom: SecurityException when the app calls the service. Cause: the app-facing AIDL enforces a permission the app does not hold. Fix: add the permission to the app (or, for development, use a test-only variant) - this is the mediation layer doing its job.',
+    'Symptom: atest fails to build the test module. Cause: the module does not depend on the framework core library. Fix: add the library to the test module dependencies in its Android.bp.',
+  ]}
+/>
+
+## 6. Mastery check
+
+The bar is that **kernel/HAL work is callable as a normal Android API from an
+app**. Concretely, you have:
+
+- A SystemService registered in `system_server` and visible in `service list` (section 2).
+- An **app-facing AIDL** interface (section 3).
+- A successful call **from an app**, returning your value (section 4).
+- A **system-side unit test** run green with `atest` (section 5).
+
+**Spine artifact:** commit the service, its AIDL, the registration diff, the
+app, and the unit test under `spine/07-systemservice` in your Project Spine fork
+(plan section 4.8). This is the artifact the competency map records for this
+phase.
+
+<Reward xp="500" badge="Framework Integrator" />
+
+<Troubleshooting
+  items={[
+    {
+      symptom: 'system_server crashes during boot with NullPointerException',
+      cause: 'SystemService constructor attempted to talk to dependent services before onBootPhase/onStart.',
+      fix: 'Defer cross-service IPC until PHASE_BOOT_COMPLETED or PHASE_SYSTEM_SERVICES_READY lifecycle callbacks.',
+    },
+    {
+      symptom: 'App gets SecurityException: Requires custom permission',
+      cause: 'Calling app does not declare the required <uses-permission> in AndroidManifest.xml.',
+      fix: 'Add the permission to the client app manifest and grant it via adb shell pm grant if signature/runtime.',
+    },
+    {
+      symptom: 'ServiceManager.getService("myservice") returns null in app',
+      cause: 'Service published with ServiceManager.addService without Context.SYSTEM_SERVICE_PUBLISHED visibility.',
+      fix: 'Register the service through publishBinderService() inside your SystemService subclass.',
+    },
+  ]}
+/>
+
+<FurtherReading
+  links={[
+    {
+      title: 'SystemService Lifecycle & Architecture',
+      url: 'https://cs.android.com/android/platform/superproject/main/+/main:frameworks/base/services/core/java/com/android/server/SystemService.java',
+      desc: 'Canonical source comments explaining system_server boot phase callbacks and service discovery.',
+    },
+    {
+      title: 'Exposing APIs to Apps: AIDL Interfaces in Framework',
+      url: 'https://source.android.com/docs/core/architecture/aidl/overview',
+      desc: 'Marshalling, parcelables, and thread-pooling rules for framework IPC APIs.',
+    },
+  ]}
+/>
+
+<CompleteButton unitId="phase-7-framework-layer" xp={500} label="Mark Phase 7 complete (+500 XP)" />
+
+<NextMission to="/docs/phase-8-security-model">
+Phase 8 — Security Model. Lock your service down: SELinux policy and contexts,
+a real audit denial resolved, and the CTS SELinux test components.
+</NextMission>

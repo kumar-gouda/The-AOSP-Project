@@ -1,0 +1,262 @@
+---
+id: phase-3-boot-init
+title: Phase 3 - Boot & Init
+sidebar_position: 5
+---
+
+import {
+  Hook,
+  Outcome,
+  Prereqs,
+  DoThis,
+  WhyItWorked,
+  BreakIt,
+  Checkpoint,
+  Reward,
+  NextMission,
+  ArchitectureDiagram,
+  Troubleshooting,
+  FurtherReading,
+} from '@site/src/components/Unit';
+import {PhaseHeader} from '@site/src/components/PhaseHeader';
+import {CompleteButton} from '@site/src/components/Progress';
+import {TestRunner} from '@site/src/components/TestRunner';
+
+# Phase 3 - Boot & Init
+
+<PhaseHeader tier="Builder" time={4} difficulty="intermediate" />
+
+<ArchitectureDiagram highlight="native" />
+
+<Hook>
+Follow the spark from power button to home screen.
+</Hook>
+
+<Outcome>
+You can trace a real boot on Cuttlefish - from the kernel's first messages,
+through `init`, to Zygote and `system_server` - and you can add your own
+`init.rc` action and boot-time property that you confirm took effect. You can
+narrate the boot chain against actual log lines, not a diagram.
+</Outcome>
+
+<Prereqs
+  interactive
+  items={[
+    'Phase 2 complete: you can `lunch`, build with `m`, and boot Cuttlefish.',
+    'A running Cuttlefish device (`adb devices` shows it).',
+    'Comfort with `adb shell`, `logcat`, and reading kernel logs.',
+  ]}
+/>
+
+:::note Honest status of this page
+Authored against a 64-bit Linux target with a Cuttlefish device. Output blocks
+are marked **expected (author-run pending)** where not yet captured on a
+reference machine. Per this project's rule, output is shown verbatim once
+captured - never paraphrased.
+:::
+
+## 1. The boot chain in one picture
+
+From power-on to the launcher, the handoff is:
+
+```
+bootloader -> boot image (kernel + ramdisk) -> init (PID 1)
+           -> zygote -> system_server -> apps
+```
+
+Each arrow is a real process handoff you can see in logs. This phase is about
+**finding each arrow in the logs**, not memorising the diagram.
+
+<WhyItWorked>
+`init` is the first userspace process (PID 1). It mounts filesystems, then reads
+its `*.rc` scripts to start everything else - including `zygote`, which forks
+`system_server`, which brings up the Java framework. Every later phase reads
+logs from one of these stages, so knowing the order is the backbone of
+debugging.
+</WhyItWorked>
+
+## 2. Watch the kernel: `dmesg`
+
+The kernel logs to a ring buffer you read with `dmesg`. On Cuttlefish you can
+read it from the host or the shell. Start here: the kernel's earliest messages.
+
+<TestRunner
+  title="Read the kernel ring buffer"
+  cmd={`adb shell dmesg | head -n 30`}
+  expect={`[    0.000000] Booting Linux on physical CPU 0x0000000000 [0x...]
+[    0.000000] Linux version ... (the kernel banner)
+[    0.000000] ...
+[    ...] init: init first stage started!
+...
+
+(The first lines are the kernel banner; look for the ramdisk / first-stage init
+line near the end.)`}
+/>
+
+<WhyItWorked>
+`dmesg` is the kernel's own record. The timestamps (`[    0.000000]`) are
+seconds since boot, so the *order* is the story: CPU up, memory init, drivers
+probe, then the kernel hands off to userspace (`init`).
+</WhyItWorked>
+
+## 3. Watch userspace: `logcat`
+
+Once userspace starts, `logcat` shows the Android-side logs. Filter by the
+`init` tag to see the service startup sequence.
+
+<TestRunner
+  title="Trace init starting services"
+  cmd={`adb logcat -b all -d | grep -E " init | zygote | system_server " | head -n 40`}
+  expect={`... init: Parsing file /system/etc/init/...
+... init: starting service 'servicemanager'...
+... init: starting service 'hwservicemanager'...
+... init: starting service 'zygote'...
+... init: starting service 'surfaceflinger'...
+... zygote: ... Forked child process ...
+... system_server: ...
+
+(Each "starting service" line is init walking its .rc files. zygote then forks
+system_server.)`}
+/>
+
+:::tip `adb logcat -b all` reads every buffer
+Android separates logs into buffers (main, system, crash, kernel). Passing
+`-b all` catches init and other system messages that the default `main` buffer
+would hide. The `-d` flag dumps and exits instead of following.
+:::
+
+<Checkpoint
+  quiz={{
+    question: 'Which process is PID 1, the first userspace process, on Android?',
+    options: [
+      'zygote',
+      'system_server',
+      'init',
+      'surfaceflinger',
+    ],
+    answer: 2,
+    explain:
+      'init is PID 1. It mounts filesystems and reads the .rc scripts that start zygote, which forks system_server, which starts the framework.',
+  }}
+/>
+
+## 4. Add your own `init.rc` action and boot-time property
+
+`init` runs **actions** (triggered by events) and **services** (long-running
+daemons). You can add your own to a device/`system` `*.rc` file. The device
+tree is the right place for local experiments.
+
+Do this: add a service and a boot-time property, then rebuild and boot.
+
+```text
+# Example: a tiny .rc file (drop into the device tree or a system rc dir)
+# Defines a property and a service, and runs an action on boot.
+
+on early-init
+    setprop persist.aosp.demo ready
+
+service aospdemo /system/bin/sh -c "while true; do echo demo alive; sleep 60; done"
+    class main
+    user shell
+    group shell
+    oneshot
+```
+
+<DoThis
+  steps={[
+    'Create an .rc file in the device tree (or a system rc directory your product includes).',
+    'Add a property: setprop persist.aosp.demo <value>.',
+    'Add a service (or an on-boot action) and reference the .rc so it is installed.',
+    'Rebuild with m and reboot the device.',
+    'Verify: getprop persist.aosp.demo returns your value, and the service appears in the logs.',
+  ]}
+/>
+
+<TestRunner
+  title="Verify the property and service after reboot"
+  cmd={`adb shell getprop persist.aosp.demo
+adb logcat -b all -d | grep aospdemo | head -n 5`}
+  expect={`ready
+... init: starting service 'aospdemo'...
+... aospdemo: demo alive
+...
+
+(persist. properties survive a reboot; the service name appears in init's log.)`}
+/>
+
+<WhyItWorked>
+`init` parses your `.rc`, registers the `aospdemo` service, and runs the
+`early-init` action - which sets the property. Because you used a `persist.`
+prefix, the value is written to a property file and restored on the next boot.
+This is exactly how real Android services (such as `surfaceflinger`) are
+declared; you have now done it yourself.
+</WhyItWorked>
+
+## Break It
+
+<BreakIt
+  items={[
+    'Symptom: getprop persist.aosp.demo returns nothing after reboot. Cause: the .rc file is not installed (not referenced by the product) or has a syntax error init ignored. Fix: check logcat for "init: ... aospdemo" parse errors and confirm the file is in the built image.',
+    'Symptom: the service starts and immediately restarts in a loop. Cause: you declared a long-running service without oneshot, but the command exits. Fix: either make the command loop (as above) or add oneshot so init treats it as run-once.',
+    'Symptom: dmesg shows nothing recent, or timestamps look wrong. Cause: the ring buffer wrapped, or you are reading the wrong buffer. Fix: use dmesg -T, or read logcat -b kernel.',
+  ]}
+/>
+
+## 5. Mastery check
+
+Narrate the boot chain **against real log lines**. From your own device, show:
+
+- A kernel line from `dmesg` early in boot (section 2).
+- `init` starting `servicemanager`, `zygote`, and `surfaceflinger` from `logcat` (section 3).
+- A **custom `init.rc` service** you added, with its `getprop` value surviving a reboot (section 4).
+
+If you can point at the exact line where each handoff happens - kernel -> init ->
+zygote -> system_server - you have met the bar.
+
+**Spine artifact:** commit your `.rc` file and the captured boot-log excerpts
+under `spine/03-init-service` in your Project Spine fork (plan section 4.8).
+This is the artifact the competency map records for this phase.
+
+<Reward xp="500" badge="Boot Chain Narrator" />
+
+<Troubleshooting
+  items={[
+    {
+      symptom: 'init: service respawning too fast (rate-limited / disabled)',
+      cause: 'A non-daemon service exited quickly without the oneshot directive.',
+      fix: 'Add oneshot to the service block in your init.rc file.',
+    },
+    {
+      symptom: 'getprop shows empty string for newly defined property',
+      cause: 'Property name lacks required prefix or was blocked by SELinux property_contexts.',
+      fix: 'Use a recognized prefix like persist.vendor. or define an explicit domain in property_contexts.',
+    },
+    {
+      symptom: 'dmesg output wraps and truncates bootloader handoff logs',
+      cause: 'Kernel ring buffer overflowed by early driver logging.',
+      fix: 'Inspect dmesg via adb shell dmesg -r or capture early logs through logcat -b kernel.',
+    },
+  ]}
+/>
+
+<FurtherReading
+  links={[
+    {
+      title: 'Android Init Language Reference',
+      url: 'https://cs.android.com/android/platform/superproject/main/+/main:system/core/init/README.md',
+      desc: 'Canonical syntax documentation for actions, triggers, services, and options in init.rc.',
+    },
+    {
+      title: 'Android Boot Flow & Stages',
+      url: 'https://source.android.com/docs/core/architecture/boot-flow',
+      desc: 'High-level walkthrough of the boot flow from ROM bootloader to Android user space.',
+    },
+  ]}
+/>
+
+<CompleteButton unitId="phase-3-boot-init" xp={500} label="Mark Phase 3 complete (+500 XP)" />
+
+<NextMission to="/docs/phase-4-kernel-foundations">
+Phase 4 — Kernel Foundations. Go one layer down: build the GKI with Kleaf, boot
+it, and read the Binder driver's wait/wake pattern.
+</NextMission>

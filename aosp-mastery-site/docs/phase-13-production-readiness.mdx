@@ -1,0 +1,314 @@
+---
+id: phase-13-production-readiness
+title: Phase 13 - Production Readiness Extras
+sidebar_position: 16
+---
+
+import {
+  Hook,
+  Outcome,
+  Prereqs,
+  DoThis,
+  WhyItWorked,
+  BreakIt,
+  Checkpoint,
+  Reward,
+  NextMission,
+  Troubleshooting,
+  FurtherReading,
+} from '@site/src/components/Unit';
+import {PhaseHeader} from '@site/src/components/PhaseHeader';
+import {CompleteButton} from '@site/src/components/Progress';
+import {TestRunner} from '@site/src/components/TestRunner';
+
+# Phase 13 - Production Readiness Extras
+
+<PhaseHeader tier="Architect" time={6} difficulty="advanced" />
+
+<Hook>
+The last 20% that makes it shippable.
+</Hook>
+
+<Outcome>
+You can harden the Spine with a **Rust** component, package it as a minimal
+**APEX**, place it in the **graphics/Camera HAL** picture, and cover it with a
+**Trade Federation / host-driven test**. Given your capstone feature, you can
+name **every subsystem it touches in a real ship**.
+</Outcome>
+
+<Prereqs
+  interactive
+  items={[
+    'Phase 7 complete: a SystemService callable from an app.',
+    'Phase 6 complete: an AIDL HAL and its VTS test.',
+    'Phase 12 optional; this phase needs no hardware.',
+  ]}
+/>
+
+:::note Honest status of this page
+Authored against a 64-bit Linux target. Output blocks are marked **expected
+(author-run pending)** where not yet captured on a reference machine. Per this
+project's rule, output is shown verbatim once captured - never paraphrased.
+:::
+
+## 1. Rust in AOSP
+
+Rust is a first-class language in AOSP, with official documentation and build
+support. You learned to *read* it in Phase 5; here you *build* with it. AOSP
+supports several Rust module types:
+
+| Module type | Android.bp rule | Use |
+|-------------|-----------------|-----|
+| **Library** | `rust_library` | Shared logic, linked by others. |
+| **Binary** | `rust_binary` | An executable. |
+| **Test** | `rust_test` | Unit tests. |
+| **Fuzzer** | `rust_fuzz` | Coverage-guided fuzzing. |
+
+```text
+// Android.bp - a Rust library with a test
+rust_library {
+    name: "libspine_rust",
+    crate_name: "spine_rust",
+    srcs: ["src/lib.rs"],
+}
+
+rust_test {
+    name: "libspine_rust_test",
+    crate_name: "spine_rust_test",
+    srcs: ["tests/test.rs"],
+    rustlibs: ["libspine_rust"],
+}
+```
+
+<DoThis
+  steps={[
+    'Add a rust_library with a small, real piece of Spine logic.',
+    'Add a rust_test that exercises it.',
+    'Build both with m and run the test.',
+    '(Optional) add a rust_fuzz target and run it briefly.',
+  ]}
+/>
+
+<TestRunner
+  title="Build and test the Rust component"
+  cmd={`m libspine_rust libspine_rust_test
+atest libspine_rust_test`}
+  expect={`... building libspine_rust ...
+... [  PASSED  ] 1 test. ...
+
+(A Rust component is just another build module. The test runs under atest like
+any other.)`}
+/>
+
+<WhyItWorked>
+Rust's memory safety is why AOSP is adopting it for new code - fewer classes of
+bug make it to production. But it is still *AOSP code*: it builds with Soong,
+is tested with your existing harness, and lives in the same tree. Phase 5 taught
+you to read it; this makes you able to ship it.
+</WhyItWorked>
+
+<Checkpoint
+  quiz={{
+    question: 'Which Android.bp rule builds a Rust unit test?',
+    options: [
+      'rust_binary',
+      'rust_test',
+      'rust_fuzz',
+      'rust_library',
+    ],
+    answer: 1,
+    explain:
+      'rust_test builds a Rust unit test; rust_library a shared library, rust_binary an executable, and rust_fuzz a coverage-guided fuzzer.',
+  }}
+/>
+
+## 2. A minimal APEX
+
+An **APEX** (Android Pony Express) is a package that ships a system component as
+an updatable module - the basis of **Mainline**, where parts of the OS update
+independently of a full OTA. Packaging the Spine as an APEX is a production
+step.
+
+```text
+// Android.bp - a minimal APEX
+apex {
+    name: "com.android.spine",
+    manifest: "apex_manifest.json",
+    binaries: ["spine_daemon"],
+    // For an updatable module, also declare it in the build and sign it.
+}
+
+// apex_manifest.json
+{
+  "name": "com.android.spine",
+  "version": 1
+}
+```
+
+<Checkpoint
+  quiz={{
+    question: 'What is the point of packaging a component as an APEX?',
+    options: [
+      'It makes the binary smaller.',
+      'It ships the component as an independently updatable module (the basis of Mainline), so it can update without a full OTA.',
+      'It disables SELinux.',
+      'It removes the need for tests.',
+    ],
+    answer: 1,
+    explain:
+      'APEX packages let a system component update on its own - the mechanism behind Mainline. You get the fix out without shipping a whole new system image.',
+  }}
+/>
+
+## 3. Graphics and Camera HAL overview
+
+You will not write a graphics or camera HAL here, but you must be able to place
+them - your capstone may touch one.
+
+- **Graphics:** `SurfaceFlinger` (compositor), the **HWC** (Hardware Composer
+  HAL), and `gralloc` (buffer allocation HAL). Apps draw into buffers;
+  SurfaceFlinger composes them via the HWC.
+- **Camera:** a layered HAL (camera provider, device, and the app-facing
+  `CameraService`), with camera HALs built on the provider model. It is one of
+  the most vendor-specific parts of a device.
+
+<WhyItWorked>
+Both are "find the seam" subsystems: the framework side (SurfaceFlinger,
+CameraService) is AOSP; the hardware side (HWC, gralloc, camera provider) is
+vendor. Knowing where that seam is tells you whether a change is yours to make
+in AOSP or something a vendor must provide - the key production question.
+</WhyItWorked>
+
+## 4. Trade Federation and host-driven tests
+
+You have used `atest` throughout. Under it is **Trade Federation (Tradefed)**, a
+host-driven test harness that orchestrates tests across one or many devices. A
+**host-driven test module** runs on the host and drives the device - useful when
+the test logic is complex or spans devices.
+
+```text
+// Android.bp - a host-driven test module (shape)
+android_test {
+    name: "SpineHostDrivenTest",
+    srcs: ["src/**/*.java"],
+    // Tradefed orchestrates: install, run on device, collect results.
+}
+```
+
+<TestRunner
+  title="Run a host-driven test module"
+  cmd={`atest SpineHostDrivenTest`}
+  expect={`... (Trade Fed builds, installs, and runs the module on the device) ...
+[  PASSED  ] 1 test. ...
+...
+
+(atest delegates to Trade Fed, which drives the device and returns results -
+this is the testing path the phase records.)`}
+/>
+
+<WhyItWorked>
+Tradefed is the harness behind `atest`, CTS, and VTS: it handles device setup,
+installation, execution, and result collection at scale. Writing a host-driven
+module means your test can orchestrate the device rather than run inside it -
+the pattern production tests use.
+</WhyItWorked>
+
+## 5. Name every subsystem: the production question
+
+The mastery bar is a **reasoning** one: given your capstone feature, name every
+subsystem it touches in a real ship. Use the full stack you have built:
+
+| Layer | Ask yourself |
+|-------|--------------|
+| Kernel | Does it need a module/driver change (Phase 10/10.5)? |
+| HAL | A new or changed AIDL HAL, with VINTF + VTS (Phase 6)? |
+| Framework | A SystemService + app-facing AIDL (Phase 7)? |
+| Security | SELinux policy, permissions (Phase 8)? |
+| Packaging | An APEX/Mainline module (section 2)? |
+| Testing | Unit / CTS / VTS / Tradefed coverage (this phase)? |
+| Real device | Partition/slot implications (Phase 11-12)? |
+
+<Checkpoint
+  quiz={{
+    question: 'What does "name every subsystem the capstone feature touches" require you to do?',
+    options: [
+      'List programming languages.',
+      'Map the feature across the real stack - kernel, HAL, framework, security, packaging, testing, device - and say what each layer must do for it to ship.',
+      'Count lines of code.',
+      'Choose a licence.',
+    ],
+    answer: 1,
+    explain:
+      'Production readiness is knowing the whole surface a feature touches: which layers change, which tests cover it, how it is packaged and secured. That map is what separates a demo from a ship.',
+  }}
+/>
+
+## Break It
+
+<BreakIt
+  items={[
+    'Symptom: the rust_test passes locally but the module is not found by atest. Cause: the test module was not declared in a build file the tree includes. Fix: add the Android.bp entry in an included directory and rebuild.',
+    'Symptom: the APEX will not install or update. Cause: a missing/incorrect apex_manifest, or the module is not signed/allowed to update. Fix: verify the manifest name/version and the updatability declaration.',
+    'Symptom: a host-driven test cannot find the device. Cause: Tradefed could not select a device (adb state, or no device). Fix: confirm `adb devices` shows it and the target is available before running atest.',
+  ]}
+/>
+
+## 6. Mastery check
+
+The bar: given your **capstone feature**, name **every subsystem it touches in a
+real ship**. Concretely, you have:
+
+- Built and tested a **Rust** component (section 1).
+- Packaged a component as a minimal **APEX** (section 2).
+- Placed the **graphics and Camera HAL** seam (section 3).
+- Written/run a **Trade Federation / host-driven test** module (section 4).
+- Produced the **subsystem map** for your capstone feature (section 5).
+
+**Spine artifact:** commit the Rust component, the APEX packaging, the
+host-driven test, and the subsystem map under `spine/13-hardening` in your
+Project Spine fork (plan section 4.8). This is the artifact the competency map
+records for this phase.
+
+<Reward xp="500" badge="Production Hardener" />
+
+<Troubleshooting
+  items={[
+    {
+      symptom: 'error[E0432]: unresolved import in rust_binary',
+      cause: 'Missing crate dependency in rustlibs property in Android.bp.',
+      fix: 'Add the crate (e.g. "libandroid_logger", "liblog_rust") to rustlibs list in Android.bp.',
+    },
+    {
+      symptom: 'apexd fails to activate APEX container on boot',
+      cause: 'APEX package signed with test keys that do not match the system partition certificate.',
+      fix: 'Set certificate: "platform" or define matching apex_key in Soong definition.',
+    },
+    {
+      symptom: 'Trade Federation test run times out waiting for device boot',
+      cause: 'ADB connection lost during user space reboot or device unresponsive under test load.',
+      fix: 'Increase test timeout parameters in tradefed test config or run atest with --verbose.',
+    },
+  ]}
+/>
+
+<FurtherReading
+  links={[
+    {
+      title: 'Rust in the Android Open Source Project',
+      url: 'https://source.android.com/docs/setup/build/rust/building-rust-modules',
+      desc: 'Coding guidelines, Soong module types (rust_binary, rust_library), and memory safety rules.',
+    },
+    {
+      title: 'APEX (Android Pony EXpress) Container System',
+      url: 'https://source.android.com/docs/core/ota/apex',
+      desc: 'Packaging modular system components for independent updates without whole-system OTA.',
+    },
+  ]}
+/>
+
+<CompleteButton unitId="phase-13-production-readiness" xp={500} label="Mark Phase 13 complete (+500 XP)" />
+
+<NextMission to="/docs/phase-14-contribution">
+Phase 14 — Contribution Workflow. Ship it like an AOSP engineer: format, upload,
+and self-review a patch that passes a reviewer's checklist.
+</NextMission>

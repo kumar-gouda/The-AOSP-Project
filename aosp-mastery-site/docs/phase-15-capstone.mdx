@@ -1,0 +1,302 @@
+---
+id: phase-15-capstone
+title: Phase 15 - Capstone
+sidebar_position: 18
+---
+
+import {
+  Hook,
+  Outcome,
+  Prereqs,
+  DoThis,
+  WhyItWorked,
+  BreakIt,
+  Checkpoint,
+  Reward,
+  NextMission,
+  Troubleshooting,
+  FurtherReading,
+} from '@site/src/components/Unit';
+import {PhaseHeader} from '@site/src/components/PhaseHeader';
+import {CompleteButton} from '@site/src/components/Progress';
+import {TestRunner} from '@site/src/components/TestRunner';
+
+# Phase 15 - Capstone
+
+<PhaseHeader tier="Architect" time={20} difficulty="advanced" />
+
+<Hook>
+Prove it.
+</Hook>
+
+<Outcome>
+One **feature threaded full-stack** - kernel → HAL → framework → app where the
+feature needs it - backed by the whole Project Spine, **passing a defined CTS/VTS
+subset**, published to a **public fork**, and **graded by a reviewer** against
+the Phase 0 competency doc. Not self-graded. The fork makes it verifiable.
+</Outcome>
+
+<Prereqs
+  interactive
+  items={[
+    'Phases −1 to 14 complete: the Spine exists and each phase committed its artifact.',
+    'A defined CTS/VTS subset chosen for your feature (Phase 6/8/13 gave you the tools).',
+    'A public fork ready, and signing set up (section 4).',
+  ]}
+/>
+
+:::danger The capstone is reviewer-graded - never self-graded
+By rule, no tier is issued for a claim a stranger cannot check. You do not mark
+this phase complete by clicking a button; a **peer or mentor** grades it against
+the Phase 0 competency doc, reading your public fork. The button at the bottom
+tracks *your* progress, not the credential.
+:::
+
+:::note Honest status of this page
+Authored against a 64-bit Linux target. Output blocks are marked **expected
+(author-run pending)** where not yet captured on a reference machine. Per this
+project's rule, output is shown verbatim once captured - never paraphrased.
+:::
+
+## 1. Thread one feature full-stack
+
+Pick one feature and carry it through the layers it actually needs. The Spine is
+not a pile of exercises; it is the evidence that you built a vertical slice.
+
+| Layer | What the capstone might add | Your phase |
+|-------|-----------------------------|-----------|
+| Kernel | A module/driver the feature needs | 10 / 10.5 |
+| HAL | An AIDL HAL + VINTF + VTS | 6 |
+| Framework | A SystemService + app-facing AIDL | 7 |
+| App | A client that calls it | 7 |
+| Security | SELinux policy so it runs under enforcing | 8 |
+| Packaging | An APEX if it ships as a module | 13 |
+
+<WhyItWorked>
+A full-stack feature is the curriculum's whole point: it proves you can move
+between the layers, not just work in one. Where the feature does not need a
+layer (most need no kernel change), say so explicitly - knowing *why* a layer is
+untouched is part of the answer.
+</WhyItWorked>
+
+## 2. Accept it with the CTS/VTS subset
+
+The capstone's acceptance criterion: a **defined CTS/VTS subset** for your
+feature passes. This is why Phases 6, 8, and 13 drilled you on VTS, CTS
+security, and Tradefed.
+
+<TestRunner
+  title="Run the defined CTS/VTS subset"
+  cmd={`# example: the VTS test module for your HAL, plus any CTS you touched
+atest VtsFooHalTest
+atest CtsSecurityHostTestCases
+# and the whole-subset run used for acceptance
+atest -m VtsFooHalTest CtsSecurityHostTestCases`}
+  expect={`... (atest delegates to Trade Fed; builds, installs, runs on device) ...
+[  PASSED  ] ...
+...
+
+(A passing, *defined* subset is the acceptance test. "It boots" is not enough -
+the recorded subset must go green.)`}
+/>
+
+<Checkpoint
+  quiz={{
+    question: 'What is the capstone acceptance criterion for testing?',
+    options: [
+      'The build succeeds.',
+      'A defined CTS/VTS subset for the feature passes.',
+      'The app launches.',
+      'The code compiles without warnings.',
+    ],
+    answer: 1,
+    explain:
+      'Acceptance is a passing, defined CTS/VTS subset - the platform\'s own compatibility tests. This is why the earlier phases insisted on VTS (Phase 6), CTS security (Phase 8), and Tradefed (Phase 13).',
+  }}
+/>
+
+## 3. The rubric a reviewer applies
+
+Your capstone is graded against the plan's rubric (section 21.3). **All** items
+are required - this is the minimum bar.
+
+<DoThis
+  steps={[
+    'Builds & boots on your target (Cuttlefish for Core; Pixel for Master).',
+    'Tests pass: the defined CTS/VTS subset for the feature goes green.',
+    'Documented: a README.md explains what it does and how to reproduce it.',
+    'Full-stack: touches kernel -> HAL -> framework -> app where the feature requires it.',
+    'Signed: commits are signature-verified (section 4).',
+    'Reproducible: a reviewer following your README gets the same result.',
+  ]}
+/>
+
+| # | Requirement | How a reviewer checks it |
+|---|-------------|--------------------------|
+| 1 | Builds & boots | Follows your build/boot notes |
+| 2 | Tests pass | Reruns the defined CTS/VTS subset |
+| 3 | Documented | Reads `README.md` |
+| 4 | Full-stack | Inspects the patch series across layers |
+| 5 | Signed | GitHub "Verified" badge on commits |
+| 6 | Reproducible | Follows the README to the same result |
+
+## 4. Sign your commits (the integrity layer)
+
+Signed commits are the anti-forgery layer: a reviewer can tell whether the
+attributed author actually authored the commit. GitHub shows a **"Verified"**
+badge if the signature matches a key on your account. GitHub documents both SSH
+and GPG commit signing - follow GitHub's own docs (linked, not restated, so they
+cannot rot).
+
+<TestRunner
+  title="Sign a commit and verify the badge"
+  cmd={`# configure signing (SSH or GPG per GitHub docs)
+git config --global commit.gpgsign true
+git commit -S -m "spine: <message>"
+git log --show-signature -1`}
+  expect={`... Good "git" signature ...
+... gpg: Signature made ... 
+
+(Push to your fork; GitHub renders a "Verified" badge when the signature matches
+a key on your account.)`}
+/>
+
+<Checkpoint
+  quiz={{
+    question: 'Why does the capstone require signed commits?',
+    options: [
+      'To make the repo smaller.',
+      'Signed commits are the anti-forgery layer: a reviewer can verify the attributed author actually authored the commit (GitHub "Verified" badge).',
+      'To encrypt the source.',
+      'Because Git requires it.',
+    ],
+    answer: 1,
+    explain:
+      'A public credential is only meaningful if a stranger can check it. Signed commits let a reviewer confirm authorship - the integrity layer behind "verifiable".',
+  }}
+/>
+
+## 5. Ship the public repo
+
+Your fork is the credential. The plan's layout (section 21.5):
+
+```text
+<learner>/aosp-mastery-spine/     # your public fork
+├── README.md                     # capstone writeup
+├── phases/
+│   ├── 00-basecamp/RESULTS.md    # commands run + real output
+│   ├── 01-systems/RESULTS.md
+│   └── ...                       # one folder per phase
+└── (the actual feature code + tests)
+```
+
+<WhyItWorked>
+Every tier resolves to a public, inspectable artifact: per-phase `RESULTS.md`
+files, the patch series, and the README. A reviewer - or any stranger - can
+verify the whole thing without a platform account. That is what makes the
+credential real rather than decorative.
+</WhyItWorked>
+
+## 6. Where each tier lands
+
+Your evidence decides your tier (plan section 21.4):
+
+| Tier | Evidence required |
+|------|-------------------|
+| Recruit | Phase 0 mastery check passed |
+| Builder | Phases −1 to 3: `RESULTS.md` per phase + the spine repo |
+| Engineer | Phases 4–9: lab results + a passing test per the Testing Thread |
+| Architect | Phases 10–15 on Cuttlefish: full spine in the fork, capstone rubric passed |
+| Master | Architect evidence **+** a self-built image booting on your own Pixel (Phase 12) |
+
+<Checkpoint
+  quiz={{
+    question: 'What distinguishes the Master tier from Architect?',
+    options: [
+      'More XP.',
+      'Architect evidence plus a self-built image booting on the learner\'s own Pixel (Phase 12).',
+      'A longer README.',
+      'Using Rust.',
+    ],
+    answer: 1,
+    explain:
+      'Master = Architect evidence + a self-built image booting on real hardware (Phase 12). Same rubric, plus the physical bring-up the elective phase requires.',
+  }}
+/>
+
+## Break It
+
+<BreakIt
+  items={[
+    'Symptom: the reviewer cannot reproduce your result. Cause: the README omits a step or assumes a different tree state. Fix: follow your own README on a clean checkout; add every missing command and the exact target.',
+    'Symptom: the CTS/VTS subset passes locally but fails for the reviewer. Cause: an environment or build difference (branch, lunch target, adb state). Fix: pin the branch/target in the README; state prerequisites explicitly.',
+    'Symptom: commits show no "Verified" badge. Cause: signing not configured, or the key is not on your account. Fix: configure commit.gpgsign and add the key to GitHub (per GitHub docs).',
+  ]}
+/>
+
+## 7. Mastery check
+
+The bar, per the plan (section 21.3): graded **by a reviewer** against the Phase 0
+competency doc, on your **public fork**. Concretely, your capstone:
+
+- Builds and boots on your target (section 3).
+- Passes the **defined CTS/VTS subset** for the feature (section 2).
+- Is documented in a `README.md` that reproduces (section 3).
+- Is **full-stack** where the feature requires it (section 1).
+- Is **signed** (section 4).
+- Is **reproducible** by a stranger (section 5).
+
+:::caution Not self-graded, by rule
+Self-grading is an explicitly rejected anti-pattern. No private-database-only
+badges, no unverifiable claims, no invented issuers. Your fork is the evidence;
+a reviewer issues the grade.
+:::
+
+**Spine artifact:** the **whole spine** - the full patch series, the per-phase
+`RESULTS.md` files, and the capstone `README.md` - under `spine/15-full` in your
+public fork (plan sections 4.8, 21.5). This is the artifact the competency map
+records for this phase, and it is the credential itself.
+
+<Reward xp="2000" badge="AOSP Architect" />
+
+<Troubleshooting
+  items={[
+    {
+      symptom: 'Commits on GitHub fork show Unverified badge',
+      cause: 'GPG or SSH signing key not uploaded to GitHub or git user.email mismatch.',
+      fix: 'Upload your public signing key to GitHub Settings -> SSH and GPG keys and set user.signingkey.',
+    },
+    {
+      symptom: 'Reviewer reports defined CTS subset fails on clean tree build',
+      cause: 'Uncommitted device overlay, missing build flag, or untracked sepolicy patch.',
+      fix: 'Test your own reproduction steps from scratch in an isolated clean container before submitting.',
+    },
+    {
+      symptom: 'VTS test module fails during acceptance test run',
+      cause: 'HAL service crashing under stress or returning uninitialized parcelable fields.',
+      fix: 'Run the module with logcat active to catch aborts and inspect the tombstones directory.',
+    },
+  ]}
+/>
+
+<FurtherReading
+  links={[
+    {
+      title: 'AOSP Compatibility Test Suite (CTS)',
+      url: 'https://source.android.com/docs/compatibility/cts',
+      desc: 'Setting up Tradefed, running CTS test plans, and analyzing test results.',
+    },
+    {
+      title: 'Vendor Test Suite (VTS) Architecture',
+      url: 'https://source.android.com/docs/core/tests/vts',
+      desc: 'Testing vendor HAL compliance against AIDL interface specifications.',
+    },
+  ]}
+/>
+
+<CompleteButton unitId="phase-15-capstone" xp={2000} label="Mark Phase 15 complete (+2000 XP)" />
+
+<NextMission to="/competency-map">
+You have reached the end of the curriculum. The Competency Map shows every
+competency you have now proven - and the tier each artifact earns you.
+</NextMission>

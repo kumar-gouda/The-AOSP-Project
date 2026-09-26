@@ -1,0 +1,301 @@
+---
+id: phase-11-real-device
+title: Phase 11 - Real Device Fundamentals
+sidebar_position: 14
+---
+
+import {
+  Hook,
+  Outcome,
+  Prereqs,
+  DoThis,
+  WhyItWorked,
+  BreakIt,
+  Checkpoint,
+  Reward,
+  NextMission,
+  Troubleshooting,
+  FurtherReading,
+} from '@site/src/components/Unit';
+import {PhaseHeader} from '@site/src/components/PhaseHeader';
+import {CompleteButton} from '@site/src/components/Progress';
+import {TestRunner} from '@site/src/components/TestRunner';
+
+# Phase 11 - Real Device Fundamentals
+
+<PhaseHeader tier="Architect" time={3} difficulty="intermediate" />
+
+<Hook>
+Cuttlefish taught you the architecture. Now meet the hardware.
+</Hook>
+
+<Outcome>
+You can read a real device's **partition layout** and its **image set**, explain
+how a Pixel differs from Cuttlefish, and reason precisely about **A/B slots** and
+**unlock** semantics - enough to say what breaks if an image goes to the wrong
+slot. **No hardware required**: this is learned from public factory images and
+documentation.
+</Outcome>
+
+<Prereqs
+  interactive
+  items={[
+    'Phase 4 complete: you built and booted the GKI on Cuttlefish.',
+    'Phase 8 complete: you can explain Verified Boot in outline.',
+    'Comfort reading partition/image documentation (no device needed).',
+  ]}
+/>
+
+:::note Honest status of this page
+Authored against a 64-bit Linux target, using public factory images and the
+Android docs. Output blocks are marked **expected (author-run pending)** where
+not yet captured on a reference machine. Per this project's rule, output is
+shown verbatim once captured - never paraphrased.
+:::
+
+## 1. Cuttlefish vs. a real Pixel
+
+Everything you built so far ran on Cuttlefish - a virtual device. A real Pixel
+is the same architecture with real hardware attached. The differences explain
+what you can and cannot learn on each.
+
+| Aspect | Cuttlefish | Real Pixel |
+|--------|------------|------------|
+| Backing | Virtual (crosvm/QEMU) | Physical SoC |
+| HALs | Generic/reference, open | Vendor-signed blobs (radio, GPU, camera, DSP) |
+| Boot chain | Virtual, no real bootloader | Real bootloader + fastboot, Verified Boot |
+| GPU | Software / virtio-gpu | Proprietary driver |
+| Radio | None | Real modem (`radio.img`) |
+| Setup | Free, minutes | Own the device, unlock, flash |
+| Risk | None | Possible bootloop if mis-flashed |
+| Best for | Framework/service/kernel-logic | Camera/radio/sensors/power/thermal |
+
+<WhyItWorked>
+The architecture you learned is identical; the *implementation* differs. On
+Cuttlefish the vendor layer is open and generic, so you can iterate freely. On a
+Pixel the vendor layer is signed blobs and the boot chain is real - which is
+exactly why you develop framework and kernel logic on Cuttlefish first, and only
+touch a physical device when the problem is genuinely hardware (camera, radio,
+thermals).
+</WhyItWorked>
+
+## 2. The partition and image set
+
+A real device ships a set of **images**, each written to a **partition**. Knowing
+which image holds what is the core of this phase.
+
+:::caution Verify per cycle
+Partition layout can change between hardware generations. The table below
+reflects a GKI-era Pixel image set; **confirm each row against a current factory
+image bundle before relying on it**. (This is the plan's `[VERIFY per cycle]`
+flag made local to this page.)
+:::
+
+| Image | Holds |
+|-------|-------|
+| `boot.img` | Generic kernel + boot ramdisk (GKI kernel) |
+| `init_boot.img` | Generic ramdisk (split since GKI 2.0) |
+| `vendor_boot.img` | Vendor ramdisk pieces (paired with generic boot) |
+| `vendor_kernel_boot.img` | Vendor kernel modules / DTB (GKI devices) |
+| `dtbo.img` / `dtb.img` | Device Tree Blob (Overlay) |
+| `vbmeta*.img` | Verified Boot metadata/signatures per group |
+| `super.img` | Dynamic container: system, vendor, product, system_ext, vendor_dlkm, system_dlkm |
+| `userdata.img` | User data - wiped on unlock |
+| `radio.img` | Modem/baseband |
+| `bootloader.img` | Bootloader |
+| `pvmfw.img` | Protected VM firmware (Android virtualization) |
+
+<Checkpoint
+  quiz={{
+    question: 'Which image holds the GKI kernel and its boot ramdisk?',
+    options: [
+      'super.img',
+      'boot.img',
+      'radio.img',
+      'vbmeta.img',
+    ],
+    answer: 1,
+    explain:
+      'boot.img holds the generic kernel and boot ramdisk. Since GKI 2.0 the generic ramdisk is split into init_boot.img, and vendor ramdisk pieces live in vendor_boot.img.',
+  }}
+/>
+
+## 3. A/B slots and what "wrong slot" breaks
+
+Modern devices keep **two copies** of the bootable partitions (slot A and slot B).
+An update writes the inactive slot and switches to it on reboot - so a failed
+update can fall back. This is why "which slot" matters: an image flashed to the
+wrong slot, or a slot that does not match its `vbmeta`, does not boot.
+
+<TestRunner
+  title="Inspect slots and the active slot (read-only, on any device)"
+  cmd={`# on a device you own (read-only commands)
+fastboot getvar current-slot
+fastboot getvar slot-count
+# and in a running system:
+adb shell getprop ro.boot.slot_suffix
+adb shell ls -l /dev/block/by-name/ | grep _a
+adb shell ls -l /dev/block/by-name/ | grep _b`}
+  expect={`current-slot: a
+slot-count: 2
+...
+ro.boot.slot_suffix=_a
+...
+... boot_a -> ...
+... boot_b -> ...
+
+(The device keeps boot_a/boot_b, system_a/system_b, etc. The active slot is
+reported by current-slot / ro.boot.slot_suffix.)`}
+/>
+
+<DoThis
+  steps={[
+    'Download a public factory image for a supported Pixel (do not flash anything).',
+    'List the images in the bundle and map each to its partition using section 2.',
+    'Identify which partitions are slotted (_a/_b) and which are not (e.g. super, userdata).',
+    'For one slotted image, write down what breaks if it is written to the wrong slot.',
+  ]}
+/>
+
+<WhyItWorked>
+Slots exist so that a failed update is recoverable. But that safety depends on
+consistency: the bootloader boots the *active* slot, and Verified Boot checks the
+`vbmeta` for that slot. Flash the boot image to slot B while the device boots
+slot A, and nothing changes; mismatch a slot's image and its vbmeta, and Verified
+Boot refuses it - a bootloop unless you can re-flash.
+</WhyItWorked>
+
+<Checkpoint
+  quiz={{
+    question: 'A device boots slot A. You flash a new boot image to slot B only. What happens on the next normal boot?',
+    options: [
+      'The device boots the new image immediately.',
+      'Nothing changes: the device still boots slot A, because you did not switch the active slot.',
+      'The device bricks.',
+      'Both slots boot simultaneously.',
+    ],
+    answer: 1,
+    explain:
+      'The bootloader boots the active slot. Writing the inactive slot changes nothing until the slot is marked active (as an A/B update would). That is why "wrong slot" can be harmless - or fatal, if the active slot\'s images and vbmeta disagree.',
+  }}
+/>
+
+## 4. The two meanings of "device tree"
+
+The phrase is overloaded, and confusing the two costs hours:
+
+- **Kernel DT** (`.dts`/`.dtsi` → `dtbo`/`dtb.img`): the hardware description
+  compiled for the kernel (you met this in Phase 10.5).
+- **Community slang** (`device/<vendor>/<codename>/`): the device-specific AOSP
+  *source directory* a `lunch` target builds.
+
+<Checkpoint
+  quiz={{
+    question: 'A guide says "find the device tree for your Pixel." Which meaning does it usually intend?',
+    options: [
+      'The compiled dtbo.img in the factory image.',
+      'The device-specific AOSP source directory (device/<vendor>/<codename>/).',
+      'The kernel log.',
+      'The vbmeta signature.',
+    ],
+    answer: 1,
+    explain:
+      'In community/AOSP bring-up slang, "the device tree" is the source directory under device/<vendor>/<codename>/. The kernel DT is the .dts/.dtsi compiled to dtbo/dtb.img. Same words, different things.',
+  }}
+/>
+
+## 5. Reading a factory image without a device
+
+You can do all of this with files alone - no hardware.
+
+<TestRunner
+  title="Unpack and inspect a factory image bundle (no device)"
+  cmd={`# a factory image is a zip containing another zip of *.img files
+unzip -l husky-*.zip | head -n 30
+# the images inside the inner zip
+unzip -l image-*.zip | head -n 30
+# inspect super.img's contents with lpunpack (from the tools)
+lpunpack --info super.img`}
+  expect={`... boot.img
+... init_boot.img
+... vendor_boot.img
+... vendor_kernel_boot.img
+... super.img
+... vbmeta.img
+...
+(logical partitions inside super.img: system, vendor, product, system_ext,
+vendor_dlkm, system_dlkm)
+
+(You can map an entire real device's image set from files alone.)`}
+/>
+
+## Break It
+
+<BreakIt
+  items={[
+    'Symptom: a freshly flashed image does not boot and the device loops. Cause: an image was written to a slot whose vbmeta does not match it, so Verified Boot refuses. Fix: flash a consistent set to the active slot (or reflash the factory image).',
+    'Symptom: you flash boot.img to the inactive slot and nothing changes. Cause: the active slot did not change. Fix: this is expected - to test it you must switch the active slot (as an update would).',
+    'Symptom: you cannot flash at all ("not allowed in locked state"). Cause: the bootloader is locked. Fix: fastboot flashing unlock wipes the device first - use a secondary/used device, never your daily driver.',
+  ]}
+/>
+
+## 6. Mastery check
+
+The bar is a **reasoning check against a public factory image set**: given a
+device's image set, say **what breaks if one is flashed to the wrong slot**.
+Concretely, you have:
+
+- Contrasted Cuttlefish and a real Pixel (section 1).
+- Mapped each image to its partition, with the verify-per-cycle caveat (section 2).
+- Explained A/B slots and what "wrong slot" does and does not break (section 3).
+- Disambiguated the two meanings of "device tree" (section 4).
+- Inspected a factory image set from files alone (section 5).
+
+**Spine artifact:** commit your analysis of one public factory image set - the
+image-to-partition map and the wrong-slot reasoning - under
+`spine/11-image-analysis` in your Project Spine fork (plan section 4.8). This is
+the artifact the competency map records for this phase.
+
+<Reward xp="500" badge="Device Analyst" />
+
+<Troubleshooting
+  items={[
+    {
+      symptom: 'fastboot: error: Device is not unlocked for flashing',
+      cause: 'Bootloader locked or OEM unlocking disabled in Developer Options.',
+      fix: 'Enable OEM Unlocking in developer settings and run fastboot flashing unlock on host.',
+    },
+    {
+      symptom: 'Device stuck in fastbootd after flashing dynamic partition',
+      cause: 'super.img flashed to raw physical slot rather than logical container.',
+      fix: 'Enter user space fastboot with fastboot reboot fastboot before flashing system/product/vendor.',
+    },
+    {
+      symptom: 'Device boots into Qualcomm / EDL emergency download mode',
+      cause: 'Bootloader partition corrupted or unsigned xbl/abl image flashed.',
+      fix: 'Reflash official factory images using Google Android Flash Tool or vendor recovery image.',
+    },
+  ]}
+/>
+
+<FurtherReading
+  links={[
+    {
+      title: 'Android Dynamic Partitions Architecture',
+      url: 'https://source.android.com/docs/core/architecture/partitions/dynamic-partitions',
+      desc: 'How the super partition groups system, vendor, and product into resizeable logical blocks.',
+    },
+    {
+      title: 'A/B (Seamless) System Updates',
+      url: 'https://source.android.com/docs/core/ota/ab',
+      desc: 'Dual-slot partition layout, boot control HAL, and seamless background streaming OTA.',
+    },
+  ]}
+/>
+
+<CompleteButton unitId="phase-11-real-device" xp={500} label="Mark Phase 11 complete (+500 XP)" />
+
+<NextMission to="/docs/phase-12-pixel-bringup">
+Phase 12 — Pixel Bring-Up Workshop (elective, master-tier). Build, flash, and
+boot your own image on a spare Pixel - and cherry-pick a change and reflash it.
+</NextMission>

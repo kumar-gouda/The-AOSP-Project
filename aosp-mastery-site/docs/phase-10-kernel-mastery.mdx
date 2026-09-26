@@ -1,0 +1,302 @@
+---
+id: phase-10-kernel-mastery
+title: Phase 10 - Kernel Mastery
+sidebar_position: 12
+---
+
+import {
+  Hook,
+  Outcome,
+  Prereqs,
+  DoThis,
+  WhyItWorked,
+  BreakIt,
+  Checkpoint,
+  Reward,
+  NextMission,
+  Troubleshooting,
+  FurtherReading,
+} from '@site/src/components/Unit';
+import {PhaseHeader} from '@site/src/components/PhaseHeader';
+import {CompleteButton} from '@site/src/components/Progress';
+import {TestRunner} from '@site/src/components/TestRunner';
+
+# Phase 10 - Kernel Mastery
+
+<PhaseHeader tier="Architect" time={6} difficulty="advanced" />
+
+<Hook>
+Now that you've seen the whole stack, go back and own the bottom.
+</Hook>
+
+<Outcome>
+A **hand-written kernel module** you built into the GKI, exposing a **`/proc`
+entry** you can read from userspace, and a bug you found using **`dmesg` and
+`ftrace` alone**. The module produces a userspace-observable effect, diagnosed
+with kernel tools - no userspace debugger.
+</Outcome>
+
+<Prereqs
+  interactive
+  items={[
+    'Phase 4 complete: you built the GKI with Kleaf and booted it on Cuttlefish.',
+    'Phase 9 complete: comfortable with dmesg and ftrace.',
+    'Phase 1 Track B: comfortable with C, pointers, and kernel idioms.',
+  ]}
+/>
+
+:::note Honest status of this page
+Authored against a 64-bit Linux target with an ACK/GKI tree. Output blocks are
+marked **expected (author-run pending)** where not yet captured on a reference
+machine. Per this project's rule, output is shown verbatim once captured -
+never paraphrased.
+:::
+
+## 1. A module is the atom of kernel code
+
+A kernel module is code the kernel loads at runtime, with the same privileges as
+the kernel itself. Once you can write, build, insert, and remove one, the whole
+kernel becomes approachable - it is just modules plus core.
+
+<WhyItWorked>
+The kernel is not a black box; it is code you can extend. A module has an
+`init` (runs on load) and an `exit` (runs on unload), and it talks to userspace
+through well-defined interfaces - the simplest being `/proc`. Phases 4-9 gave
+you everything above the module boundary; this phase crosses it.
+</WhyItWorked>
+
+## 2. Write a minimal module
+
+Start with the atom: a module that logs on load and unload. Then add a `/proc`
+entry that userspace can read - the "userspace-observable effect" the mastery
+check needs.
+
+```c
+// hello_kmod.c - a minimal module with a /proc entry
+#include <linux/module.h>
+#include <linux/kernel.h>
+#include <linux/proc_fs.h>
+#include <linux/seq_file.h>
+
+static int hello_show(struct seq_file *m, void *v) {
+    seq_printf(m, "hello_kmod: version %d\n", 1);
+    return 0;
+}
+
+static int hello_open(struct inode *inode, struct file *file) {
+    return single_open(file, hello_show, NULL);
+}
+
+static const struct proc_ops hello_proc_ops = {
+    .proc_open = hello_open,
+    .proc_read = seq_read,
+    .proc_lseek = seq_lseek,
+    .proc_release = single_release,
+};
+
+static int __init hello_init(void) {
+    proc_create("hello_kmod", 0, NULL, &hello_proc_ops);
+    pr_info("hello_kmod: loaded\n");
+    return 0;
+}
+
+static void __exit hello_exit(void) {
+    remove_proc_entry("hello_kmod", NULL);
+    pr_info("hello_kmod: unloaded\n");
+}
+
+module_init(hello_init);
+module_exit(hello_exit);
+MODULE_LICENSE("GPL");
+MODULE_DESCRIPTION("Minimal /proc module for the Project Spine");
+```
+
+<DoThis
+  steps={[
+    'Add hello_kmod as a module in your ACK/GKI tree (a Kleaf module target).',
+    'Build it with your Phase 4 Kleaf workflow.',
+    'Insert it on Cuttlefish (insmod) or build it in and rebuild images.',
+    'Read /proc/hello_kmod from userspace to see the observable effect.',
+  ]}
+/>
+
+<TestRunner
+  title="Load the module and read its /proc entry"
+  cmd={`adb shell insmod /data/local/tmp/hello_kmod.ko
+adb shell cat /proc/hello_kmod
+adb shell dmesg | grep hello_kmod | tail -n 5`}
+  expect={`hello_kmod: version 1
+... hello_kmod: loaded ...
+
+(You inserted code into a running kernel, and userspace can now read it through
+/proc. That is the userspace-observable effect.)`}
+/>
+
+<WhyItWorked>
+`proc_create` registers a file in `/proc` backed by your kernel functions; when
+userspace reads it, the kernel calls your `hello_show`. `pr_info` writes to the
+kernel log (`dmesg`). So the same module is observable from **userspace**
+(`/proc`) and **kernel space** (dmesg) - exactly the two views you will use to
+diagnose it.
+</WhyItWorked>
+
+<Checkpoint
+  quiz={{
+    question: 'What two interfaces make a kernel module observable?',
+    options: [
+      'Only a userspace debugger can observe a module.',
+      'A userspace interface like /proc (readable by programs) and the kernel log (dmesg, written via pr_info).',
+      'Only the bootloader.',
+      'A module is not observable at all.',
+    ],
+    answer: 1,
+    explain:
+      'A module is observable from userspace through an interface such as /proc, and from kernel space through the log (dmesg). Both views are how you "see" it without a debugger.',
+  }}
+/>
+
+## 3. Diagnose with kernel tools alone
+
+The phase's core skill: when the module misbehaves, find it with `dmesg` and
+`ftrace` - not a userspace debugger. The kernel log is the kernel's own evidence.
+
+<TestRunner
+  title="Read the kernel log"
+  cmd={`adb shell dmesg | grep -iE "hello_kmod|BUG|WARN|Oops" | tail -n 20`}
+  expect={`... hello_kmod: loaded ...
+... (or on a bug) BUG: ... or WARNING: ... at ... hello_show+0x...
+...
+
+(dmesg carries module messages and kernel WARN/BUG reports, with the faulting
+function named inline.)`}
+/>
+
+<Checkpoint
+  quiz={{
+    question: 'A module dereferences a bad pointer. Where do you look FIRST?',
+    options: [
+      'Attach gdb to the device.',
+      'The kernel log (dmesg) for a BUG/WARN/Oops with the faulting function.',
+      'Reinstall the device.',
+      'Check the SELinux policy.',
+    ],
+    answer: 1,
+    explain:
+      'Kernel faults report to the kernel log (dmesg), naming the faulting function and often a stack. That is the kernel\'s evidence, and it is where diagnosis starts.',
+  }}
+/>
+
+<TestRunner
+  title="Trace module function calls with ftrace"
+  cmd={`adb shell "echo function > /sys/kernel/tracing/current_tracer"
+adb shell "echo hello_show > /sys/kernel/tracing/set_ftrace_filter"
+adb shell "echo 1 > /sys/kernel/tracing/tracing_on"
+adb shell cat /proc/hello_kmod
+adb shell "echo 0 > /sys/kernel/tracing/tracing_on"
+adb shell cat /sys/kernel/tracing/trace | head -n 10`}
+  expect={`... hello_show ...
+...
+
+(ftrace shows your module's functions running in order as userspace triggers
+them - proof you are observing kernel behaviour, not guessing.)`}
+/>
+
+<WhyItWorked>
+`dmesg` tells you *what happened* (and what faulted); `ftrace` tells you *what
+ran*. Together they let you reconstruct the kernel's behaviour from its own
+records - the only evidence available on a device you cannot attach a debugger
+to, which is the point of the mastery bar.
+</WhyItWorked>
+
+## 4. The road ahead: kselftest and KUnit
+
+Phase 10 gets you a module and its `/proc` effect. The **testing** thread for
+kernel code is **kselftest** (userspace-driven kernel self-tests) and **KUnit**
+(in-kernel unit tests). Phase 10.5 goes deeper - a full driver with a
+device-tree binding, covered by these tests. For now, know that kernel code is
+tested *inside the kernel build*, not with the userspace harnesses you used
+earlier.
+
+<Checkpoint
+  quiz={{
+    question: 'How is kernel code unit-tested in the AOSP/common-kernel world?',
+    options: [
+      'With the same GTest binaries as userspace.',
+      'With KUnit (in-kernel unit tests) and kselftest (kernel self-tests).',
+      'It is not tested.',
+      'Only with a userspace debugger.',
+    ],
+    answer: 1,
+    explain:
+      'KUnit runs tests inside the kernel; kselftest runs kernel self-tests driven from userspace. These are the kernel\'s own testing frameworks - Phase 10.5 uses them on a real driver.',
+  }}
+/>
+
+## Break It
+
+<BreakIt
+  items={[
+    'Symptom: insmod fails with "invalid module format". Cause: the module was built against a different kernel (version/KMI mismatch). Fix: build the module from the same ACK/GKI tree and version you are booting.',
+    'Symptom: reading /proc/hello_kmod hangs or returns nothing. Cause: a bug in the open/read path (e.g. wrong proc_ops). Fix: check dmesg for a WARN/BUG naming the faulting function; verify the seq_file wiring.',
+    'Symptom: the module refuses to unload (rmmod says it is in use). Cause: a reference was not released in exit, or an open file handle remains. Fix: ensure remove_proc_entry runs and no process holds the file open.',
+  ]}
+/>
+
+## 5. Mastery check
+
+The bar: a module produces a **userspace-observable effect, diagnosed with
+kernel tools alone**. Concretely, you have:
+
+- Written and built a kernel module into the GKI (section 2).
+- Exposed a **`/proc` entry** readable from userspace (section 2).
+- Produced the effect and observed it via `/proc` and `dmesg` (section 2).
+- Diagnosed a kernel issue using **`dmesg` and `ftrace`** (section 3).
+- Placed kselftest/KUnit in the kernel testing landscape (section 4).
+
+**Spine artifact:** commit the module source, its build target, and the
+`/proc`/`dmesg` evidence under `spine/10-kmod` in your Project Spine fork (plan
+section 4.8). This is the artifact the competency map records for this phase.
+
+<Reward xp="500" badge="Kernel Module Author" />
+
+<Troubleshooting
+  items={[
+    {
+      symptom: 'insmod: Key was rejected by service / signature verification failed',
+      cause: 'Kernel image has CONFIG_MODULE_SIG_FORCE enabled but module was not signed.',
+      fix: 'Sign the .ko with scripts/sign-file using the build-time ephemeral kernel key.',
+    },
+    {
+      symptom: 'Kernel panic / NULL pointer dereference when reading /proc entry',
+      cause: 'seq_file .show callback accessed invalid pointer or returned negative errno improperly.',
+      fix: 'Guard buffer accesses in your single_open callback and test with seq_printf.',
+    },
+    {
+      symptom: 'rmmod fails with Resource temporarily unavailable or module is in use',
+      cause: 'Module reference count > 0 (open file descriptor in userspace holding /proc file).',
+      fix: 'Close any process or shell with cat /proc/my_entry running before unloading.',
+    },
+  ]}
+/>
+
+<FurtherReading
+  links={[
+    {
+      title: 'Linux Kernel Documentation: The /proc Filesystem',
+      url: 'https://docs.kernel.org/filesystems/seq_file.html',
+      desc: 'Managing sequential procfs files safely with the seq_file interface.',
+    },
+    {
+      title: 'Android Kernel Architecture & ACK Modules',
+      url: 'https://source.android.com/docs/core/architecture/kernel/kernel-modules',
+      desc: 'Building, loading, and distributing out-of-tree vendor kernel modules.',
+    },
+  ]}
+/>
+
+<CompleteButton unitId="phase-10-kernel-mastery" xp={500} label="Mark Phase 10 complete (+500 XP)" />
+
+<NextMission to="/docs/phase-10-5-drivers">
+Phase 10.5 — Kernel Subsystems & Drivers. A real char/IIO driver, a device-tree
+binding, kselftest + KUnit, and a patched AOSP common-kernel subsystem.
+</NextMission>

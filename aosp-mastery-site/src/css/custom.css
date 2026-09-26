@@ -1,0 +1,111 @@
+/**
+ * Global custom styles for AOSP Mastery platform.
+ * Fully supports Light Mode and Dark Mode with high contrast (WCAG AA).
+ */
+
+:root {
+  /* Brand colors inspired by Android green & engineering aesthetics */
+  --ifm-color-primary: #137333;
+  --ifm-color-primary-dark: #11682e;
+  --ifm-color-primary-darker: #10622b;
+  --ifm-color-primary-darkest: #0d5124;
+  --ifm-color-primary-light: #1b873f;
+  --ifm-color-primary-lighter: #209346;
+  --ifm-color-primary-lightest: #27a750;
+
+  --ifm-code-font-size: 92%;
+  --docusaurus-highlighted-code-line-bg: rgba(19, 115, 51, 0.1);
+
+  --aosp-border-radius: 8px;
+}
+
+[data-theme='dark'] {
+  --ifm-color-primary: #3ddc84;
+  --ifm-color-primary-dark: #2bc871;
+  --ifm-color-primary-darker: #24bd67;
+  --ifm-color-primary-darkest: #1a9e52;
+  --ifm-color-primary-light: #57e297;
+  --ifm-color-primary-lighter: #6ee6a3;
+  --ifm-color-primary-lightest: #93edb8;
+
+  --ifm-background-color: #121316;
+  --ifm-background-surface-color: #1a1c21;
+
+  --docusaurus-highlighted-code-line-bg: rgba(61, 220, 132, 0.15);
+}
+
+/* Accessibility: clear visible focus outlines for keyboard navigation */
+:focus-visible {
+  outline: 2px solid var(--ifm-color-primary);
+  outline-offset: 2px;
+}
+
+/* Responsive Tables: ensure wide tables scroll horizontally without breaking layout */
+.markdown table {
+  display: block;
+  width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin-bottom: 1.5rem;
+  -webkit-overflow-scrolling: touch;
+}
+
+.markdown table th {
+  background: var(--ifm-color-emphasis-100);
+  font-weight: 700;
+  text-align: left;
+}
+
+.markdown table tr:nth-child(2n) {
+  background-color: var(--ifm-color-emphasis-0);
+}
+
+/* Code block & inline code polish */
+code {
+  border-radius: 4px;
+  padding: 0.15rem 0.35rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+/* Smooth details/summary collapse */
+details {
+  border: 1px solid var(--ifm-color-emphasis-300);
+  border-radius: var(--aosp-border-radius);
+  padding: 0.75rem 1rem;
+  margin-bottom: 1.25rem;
+  background: var(--ifm-background-surface-color);
+  transition: all 0.2s ease;
+}
+
+details[open] {
+  border-color: var(--ifm-color-emphasis-400);
+}
+
+summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+/* Navbar polish */
+.navbar__brand {
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+/* Custom scrollbars on desktop */
+@media screen and (min-width: 996px) {
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: var(--ifm-background-color);
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--ifm-color-emphasis-300);
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--ifm-color-emphasis-500);
+  }
+}

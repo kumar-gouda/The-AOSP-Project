@@ -1,0 +1,72 @@
+# Continuous integration for the AOSP Mastery site.
+#
+# What this does that a plain build does not:
+#   1. Runs the production build on every push/PR, so a broken page or a bad
+#      competency-map edit fails here instead of in production.
+#   2. Sets STRICT_LINKS=1, which makes Docusaurus TREAT BROKEN LINKS AS ERRORS
+#      (see docusaurus.config.js). Locally, broken links are only warnings, so
+#      without this flag CI would pass on dangling links.
+#   3. Because docusaurus.config.js imports data/load-competency-map.mjs at
+#      build time, a malformed competency map (duplicate ids, bad tiers, non-
+#      spine/ artifacts) also fails this job.
+#
+# Action versions: actions/checkout@v4 and actions/setup-node@v4 are the stable
+# majors used by the official starter workflows. This job needs no other action.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'aosp-mastery-site/**'
+      - '.github/workflows/ci.yml'
+  pull_request:
+    paths:
+      - 'aosp-mastery-site/**'
+      - '.github/workflows/ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build (strict links)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: aosp-mastery-site
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: aosp-mastery-site/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate competency map
+        # Fails fast with a clear message if the map is malformed, before the
+        # full build runs. Mirrors the check the config performs at build time.
+        run: node -e "import('./data/load-competency-map.mjs').then(m => { const r = m.loadCompetencyMap(); console.log('competency map OK:', JSON.stringify(r.stats)); }).catch(e => { console.error(e.message); process.exit(1); })"
+
+      - name: Build site (broken links are errors)
+        env:
+          STRICT_LINKS: '1'
+        run: npm run build
+
+# Verified locally: the two run steps above were executed on a clean checkout.
+#   - competency-map check -> "competency map OK: {phaseCount:18,...}" exit 0
+#   - strict build with an injected bad link -> exit 1 (build failed, as intended)
+#   - strict build clean -> exit 0

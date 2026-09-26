@@ -1,0 +1,293 @@
+.block {
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  margin: 1rem 0;
+  border-left: 4px solid var(--ifm-color-primary);
+  background: var(--ifm-background-surface-color);
+  box-shadow: var(--ifm-global-shadow-lw, 0 1px 2px rgba(0, 0, 0, 0.1));
+}
+
+.hook {
+  font-size: 1.05rem;
+  font-style: italic;
+  border-left-color: #25c2a0;
+}
+
+.outcome {
+  border-left-color: #3b82f6;
+}
+
+.prereqs {
+  border-left-color: #a855f7;
+}
+
+.why {
+  border-left-color: #eab308;
+}
+
+.break {
+  border-left-color: #ef4444;
+}
+
+.checkpoint {
+  border-left-color: #06b6d4;
+}
+
+.checkpointQuestion {
+  margin-bottom: 0.5rem;
+}
+
+.checkpointBody {
+  margin-top: 0.5rem;
+}
+
+.quizOptions {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0 0;
+}
+
+.quizOptions li {
+  margin-bottom: 0.4rem;
+}
+
+.quizOption {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--ifm-color-emphasis-300);
+  border-radius: 6px;
+  background: var(--ifm-background-color);
+  color: var(--ifm-font-color-base);
+  cursor: pointer;
+  font-size: 0.95rem;
+}
+
+.quizOption:hover {
+  border-color: var(--ifm-color-primary);
+}
+
+.quizCorrect {
+  border-color: #10b981;
+  background: rgba(16, 185, 129, 0.12);
+  font-weight: 600;
+}
+
+.quizWrong {
+  border-color: #ef4444;
+  background: rgba(239, 68, 68, 0.12);
+}
+
+.quizFeedback {
+  margin: 0.25rem 0 0.5rem;
+}
+
+.quizFeedbackOk {
+  color: #10b981;
+}
+
+.quizFeedbackNo {
+  color: #ef4444;
+}
+
+.quizRetry {
+  margin-top: 0.25rem;
+}
+
+.reward {
+  border-left-color: #f97316;
+}
+
+.next {
+  border-left-color: #10b981;
+}
+
+.steps {
+  padding-left: 1.25rem;
+}
+
+.steps li {
+  margin-bottom: 0.35rem;
+}
+
+/* --- Prereqs interactive upgrade --- */
+
+.prereqChecklist {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0 0;
+}
+
+.prereqChecklist li {
+  margin-bottom: 0.35rem;
+}
+
+.prereqLabel {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  cursor: pointer;
+}
+
+.prereqLabel input[type='checkbox'] {
+  margin-top: 0.3rem;
+  flex-shrink: 0;
+}
+
+.prereqDone {
+  text-decoration: line-through;
+  color: var(--ifm-color-emphasis-500);
+}
+
+.prereqAllDone {
+  margin: 0.5rem 0 0;
+  font-size: 0.9rem;
+  color: #10b981;
+  font-weight: 600;
+}
+
+/* --- TimeEstimate --- */
+
+.timeEstimate {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  background: var(--ifm-color-emphasis-100);
+  color: var(--ifm-color-emphasis-700);
+  white-space: nowrap;
+}
+
+/* --- DifficultyBadge --- */
+
+.diffBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.diffBeginner {
+  background: rgba(16, 185, 129, 0.15);
+  color: #059669;
+}
+
+.diffIntermediate {
+  background: rgba(234, 179, 8, 0.15);
+  color: #b45309;
+}
+
+.diffAdvanced {
+  background: rgba(239, 68, 68, 0.15);
+  color: #dc2626;
+}
+
+[data-theme='dark'] .diffBeginner {
+  color: #34d399;
+}
+
+[data-theme='dark'] .diffIntermediate {
+  color: #fbbf24;
+}
+
+[data-theme='dark'] .diffAdvanced {
+  color: #f87171;
+}
+
+/* --- ArchitectureDiagram --- */
+
+.archDiagram {
+  margin: 1rem 0;
+  border: 1px solid var(--ifm-color-emphasis-300);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.archTitle {
+  padding: 0.6rem 1rem;
+  margin: 0;
+  background: var(--ifm-color-emphasis-100);
+  border-bottom: 1px solid var(--ifm-color-emphasis-300);
+  font-size: 0.9rem;
+}
+
+.archLayer {
+  padding: 0.55rem 1rem;
+  font-size: 0.9rem;
+  border-bottom: 1px solid var(--ifm-color-emphasis-200);
+  color: var(--ifm-color-emphasis-600);
+}
+
+.archLayer:last-child {
+  border-bottom: none;
+}
+
+.archLayerActive {
+  background: var(--ifm-color-emphasis-100);
+  color: var(--ifm-color-primary);
+  font-weight: 700;
+  border-left: 4px solid var(--ifm-color-primary);
+}
+
+.archArrow {
+  color: var(--ifm-color-primary);
+}
+
+/* --- Troubleshooting --- */
+
+.troubleshooting {
+  border-left-color: #f59e0b;
+}
+
+.troubleshootingSummary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.troubleshootingTable {
+  width: 100%;
+  margin-top: 0.75rem;
+  font-size: 0.9rem;
+  border-collapse: collapse;
+}
+
+.troubleshootingTable th {
+  text-align: left;
+  padding: 0.4rem 0.6rem;
+  background: var(--ifm-color-emphasis-100);
+  border-bottom: 2px solid var(--ifm-color-emphasis-300);
+}
+
+.troubleshootingTable td {
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--ifm-color-emphasis-200);
+  vertical-align: top;
+}
+
+/* --- FurtherReading --- */
+
+.furtherReading {
+  border-left-color: #6366f1;
+}
+
+.furtherReadingList {
+  margin: 0.5rem 0 0;
+  padding-left: 1.25rem;
+}
+
+.furtherReadingList li {
+  margin-bottom: 0.3rem;
+}
+
+.furtherReadingDesc {
+  color: var(--ifm-color-emphasis-600);
+  font-size: 0.9rem;
+}

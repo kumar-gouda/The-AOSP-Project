@@ -1,0 +1,286 @@
+---
+id: phase-2-build-system
+title: Phase 2 - Build System
+sidebar_position: 4
+---
+
+import {
+  Hook,
+  Outcome,
+  Prereqs,
+  DoThis,
+  WhyItWorked,
+  BreakIt,
+  Checkpoint,
+  Reward,
+  NextMission,
+  Troubleshooting,
+  FurtherReading,
+} from '@site/src/components/Unit';
+import {PhaseHeader} from '@site/src/components/PhaseHeader';
+import {CompleteButton} from '@site/src/components/Progress';
+import {TestRunner} from '@site/src/components/TestRunner';
+
+# Phase 2 - Build System
+
+<PhaseHeader tier="Builder" time={8} difficulty="intermediate" />
+
+<Hook>
+Learn to drive before you learn the engine.
+</Hook>
+
+<Outcome>
+A clean AOSP build on the Cuttlefish target, a real edit to a `.bp` module
+definition that shows up in your incremental rebuild, and a booted Cuttlefish
+virtual device - all driven by the build system you now understand: Soong,
+Kati, and Ninja.
+</Outcome>
+
+<Prereqs
+  interactive
+  items={[
+    'Phase 0 complete: the source is synced to `android-latest-release` and Cuttlefish host packages are installed and verified (`groups` shows kvm, cvdnetwork, render).',
+    'Phase 1 complete: comfortable compiling C/C++, reading build errors, and running things on the command line.',
+    'Disk and RAM verified (>= 400 GB free, >= 64 GB RAM) - a build is the heaviest thing you will run.',
+  ]}
+/>
+
+:::note Honest status of this page
+Authored against a 64-bit Linux target. Output blocks are marked **expected
+(author-run pending)** where not yet captured on a reference machine. Per this
+project's rule, output is shown verbatim once captured - never paraphrased.
+:::
+
+## 1. The build in one picture
+
+AOSP does not use a single build tool. It is three layers:
+
+| Tool | Language | Role |
+|------|----------|------|
+| **Soong** | **Blueprint** (`.bp`, Go-syntax) | The modern build: describes *what* to build (modules, sources, deps). |
+| **Kati** | `Android.mk` (GNU make) | The legacy layer, kept for the parts not yet migrated to Soong. |
+| **Ninja** | `build.ninja` | The actual executor: reads a graph and runs the exact commands, fast. |
+
+Soong and Kati both **generate** a Ninja graph; Ninja **runs** it. When you type
+`m`, the `envsetup.sh`/`build` wrapper orchestrates all of this.
+
+<WhyItWorked>
+This is why AOSP builds are fast on the second run: Ninja tracks every input and
+only re-runs commands whose inputs changed. Learning which layer to edit - a
+`.bp` (Soong) versus an `.mk` (Kati) - is the core skill of this phase.
+</WhyItWorked>
+
+## 2. Set up the environment and choose a target
+
+`lunch` selects a **target**: a product/device and a build variant. The format
+is `product_name-release_config-build_variant` (for example
+`aosp_cf_x86_64_only_phone-aosp_current-userdebug`).
+
+<TestRunner
+  title="Source the environment, then lunch"
+  cmd={`cd aosp
+source build/envsetup.sh
+lunch aosp_cf_x86_64_only_phone-aosp_current-userdebug`}
+  expect={`============================================
+PLATFORM_VERSION_CODENAME=...
+PLATFORM_VERSION=...
+TARGET_PRODUCT=aosp_cf_x86_64_only_phone
+TARGET_BUILD_VARIANT=userdebug
+TARGET_ARCH=x86_64
+============================================
+
+(TARGET_PRODUCT and TARGET_BUILD_VARIANT must match what you passed to lunch.)`}
+/>
+
+:::warning The `trunk_staging` form is outdated
+Older material used lunch strings like `aosp_<name>-trunk_staging-userdebug`.
+That release-config is no longer valid; use the `-aosp_current-` form above
+(the plan's corrected-command table, section 6.2).
+:::
+
+## 3. First build with `m`
+
+`m` (from `envsetup.sh`) builds from the root of the tree. The first build is
+the long one. Later builds reuse Ninja's outputs.
+
+<TestRunner
+  title="Build the default target (first build)"
+  cmd={`m`}
+  expect={`...
+[  0% 12/...] ...
+[  1% 340/...] ...
+...
+#### build completed successfully (HH:MM:SS) ####
+
+(The first build can take a long time. Subsequent builds are incremental and
+finish in minutes or seconds.)`}
+/>
+
+:::note The source tree is read-only on Android 17+
+Modern AOSP checks the tree out read-only, so a build step that writes into the
+tree must be told it may. The documented switch is
+`BUILD_BROKEN_SRC_DIR_IS_WRITABLE=true`. You will need this when you edit a
+`.bp` and rebuild (section 4). It is expected behaviour, not a broken setup.
+:::
+
+<Checkpoint
+  quiz={{
+    question: 'What is the relationship between Soong, Kati, and Ninja?',
+    options: [
+      'Ninja replaces both Soong and Kati.',
+      'Soong and Kati describe/translate the build; both emit a Ninja graph; Ninja executes it.',
+      'Kati runs first and Soong runs the compiled result.',
+      'They are three names for the same tool.',
+    ],
+    answer: 1,
+    explain:
+      'Soong (Blueprint .bp) and Kati (Android.mk) are the description/translation layers. Both generate build.ninja, and Ninja is the executor that actually runs the commands.',
+  }}
+/>
+
+## 4. Edit a `.bp` and rebuild incrementally
+
+Blueprint files declare modules. Here is a minimal `cc_library` you can add to
+see the build system pick up a new module. Put it somewhere it is referenced,
+or read it alongside an existing `.bp` to compare.
+
+```text
+// Example: a minimal Soong module (Blueprint / .bp syntax)
+cc_library {
+    name: "libhello",
+    srcs: ["hello.cpp"],
+    cflags: ["-Wall", "-Wextra"],
+    shared_libs: ["liblog"],
+}
+```
+
+<DoThis
+  steps={[
+    'Open an existing Android.bp in the tree and read one module it declares.',
+    'Change something small and real: add a source file to an existing module, or add a cflag.',
+    'Rebuild with `m` and confirm only the affected targets rebuild.',
+    'Revert if you were experimenting; keep the tree clean.',
+  ]}
+/>
+
+<TestRunner
+  title="Incremental rebuild after a .bp edit"
+  cmd={`# after editing a .bp (and, on Android 17+, exporting the writable-tree override)
+export BUILD_BROKEN_SRC_DIR_IS_WRITABLE=true
+m`}
+  expect={`...
+[ 99% ...] ...
+#### build completed successfully (MM:SS) ####
+
+(An incremental build after a small .bp change should be far shorter than the
+first build. If it rebuilds everything, your change touched a common input.)`}
+/>
+
+<WhyItWorked>
+Soong reads your `.bp`, resolves the module graph, and regenerates the relevant
+Ninja edges. Because Ninja hashes inputs, only the modules whose inputs you
+changed (and their dependents) re-run. That is the payoff of separating
+description (Soong) from execution (Ninja).
+</WhyItWorked>
+
+## 5. Flash-free boot: run it on Cuttlefish
+
+Cuttlefish is a virtual device - no phone required. Phase 0 installed its host
+packages and added you to the `kvm`/`cvdnetwork`/`render` groups (after a
+reboot). Boot your freshly built images.
+
+<TestRunner
+  title="Launch Cuttlefish from your build output"
+  cmd={`# from the tree where you synced (the android-cuttlefish checkout)
+HOME=$PWD ./bin/launch_cvd --daemon`}
+  expect={`... (Cuttlefish starts its virtual device) ...
+(launch_cvd returns once the device is starting. WebRTC UI:
+ https://localhost:8443 )`}
+/>
+
+Then confirm it is alive with the standard tooling:
+
+<TestRunner
+  title="Confirm the device booted"
+  cmd={`adb wait-for-device
+adb shell getprop sys.boot_completed`}
+  expect={`1
+
+(sys.boot_completed = 1 means the device finished booting. If adb is not found,
+run it from $ANDROID_HOST_OUT/bin, or add it to PATH.)`}
+/>
+
+<WhyItWorked>
+Cuttlefish runs the same images Android builds for real hardware, on your
+machine. Because you set `TARGET_PRODUCT=aosp_cf_x86_64_only_phone`, the build
+produced exactly the images Cuttlefish boots. This is the tightest loop this
+course offers: edit, rebuild, reboot - no physical device.
+</WhyItWorked>
+
+## Break It
+
+<BreakIt
+  items={[
+    'Symptom: lunch fails with "Could not locate aapt" or "no product spec". Cause: you did not source build/envsetup.sh first, or the tree is not synced. Fix: source build/envsetup.sh, confirm the product name from the .../target/product/ dir, then lunch.',
+    'Symptom: the build stops writing into the tree with a read-only error. Cause: Android 17+ checks the tree out read-only. Fix: export BUILD_BROKEN_SRC_DIR_IS_WRITABLE=true before m, as documented.',
+    'Symptom: launch_cvd fails with a KVM or "permission denied" error. Cause: your shell is not in the kvm group (you skipped the post-usermod reboot). Fix: reboot, then confirm with groups that kvm, cvdnetwork, and render are present.',
+  ]}
+/>
+
+## 6. Mastery check
+
+Unassisted, complete a **clean build** of the Cuttlefish target and **boot it**.
+Concretely, you have:
+
+- Sourced `envsetup.sh` and `lunch aosp_cf_x86_64_only_phone-aosp_current-userdebug` (section 2).
+- Run a full `m` that completed successfully (section 3).
+- Edited a `.bp` (or an equivalent real module change) and seen an **incremental** rebuild pick it up (section 4).
+- Launched Cuttlefish and confirmed `sys.boot_completed = 1` (section 5).
+
+**Spine artifact:** commit your `.bp` instrumentation change and the build/boot
+proof under `spine/02-instrumentation` in your Project Spine fork (plan section
+4.8). This is the artifact the competency map records for this phase.
+
+<Reward xp="500" badge="Build System Driver" />
+
+<Troubleshooting
+  items={[
+    {
+      symptom: 'ninja: fatal: posix_spawn: Cannot allocate memory (OOM)',
+      cause: 'Heavy parallel link steps exceeding host RAM during whole-tree compilation.',
+      fix: 'Throttle Ninja parallelism with m -j4 or -j8 instead of default core count.',
+    },
+    {
+      symptom: 'lunch command not found in terminal',
+      cause: 'Subshell did not initialize AOSP development environment macros.',
+      fix: 'Execute source build/envsetup.sh in the root of the AOSP tree.',
+    },
+    {
+      symptom: 'error: writing to read-only source directory',
+      cause: 'Android 17 sandboxing prevents build artifacts from dirtying source trees.',
+      fix: 'Set export BUILD_BROKEN_SRC_DIR_IS_WRITABLE=true or move generated artifacts to out/.',
+    },
+  ]}
+/>
+
+<FurtherReading
+  links={[
+    {
+      title: 'Soong Build System Concepts',
+      url: 'https://source.android.com/docs/setup/build',
+      desc: 'How Soong, Blueprint, and Kati work together to generate Ninja graphs.',
+    },
+    {
+      title: 'Cuttlefish Architecture & CVD Control',
+      url: 'https://source.android.com/docs/devices/cuttlefish',
+      desc: 'Launching, stopping, and inspecting headless vs WebRTC virtual Android instances.',
+    },
+  ]}
+/>
+
+<CompleteButton unitId="phase-2-build-system" xp={500} label="Mark Phase 2 complete (+500 XP)" />
+
+<NextMission to="/docs/phase-3-boot-init">
+Phase 3 — Boot & Init. Now trace the spark: dmesg, logcat, a custom init.rc
+action, and a boot-time property - from power button to home screen.
+</NextMission>
