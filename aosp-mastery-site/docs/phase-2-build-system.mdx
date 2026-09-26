@@ -16,6 +16,10 @@ import {
   NextMission,
   Troubleshooting,
   FurtherReading,
+  KeywordSpotlight,
+  DeepDive,
+  CodeAnnotator,
+  ConceptComparison,
 } from '@site/src/components/Unit';
 import {PhaseHeader} from '@site/src/components/PhaseHeader';
 import {CompleteButton} from '@site/src/components/Progress';
@@ -30,7 +34,7 @@ Learn to drive before you learn the engine.
 </Hook>
 
 <Outcome>
-A clean AOSP build on the Cuttlefish target, a real edit to a `.bp` module
+A clean AOSP build on the Cuttlefish target, a real edit to an `Android.bp` module
 definition that shows up in your incremental rebuild, and a booted Cuttlefish
 virtual device - all driven by the build system you now understand: Soong,
 Kati, and Ninja.
@@ -39,207 +43,323 @@ Kati, and Ninja.
 <Prereqs
   interactive
   items={[
-    'Phase 0 complete: the source is synced to `android-latest-release` and Cuttlefish host packages are installed and verified (`groups` shows kvm, cvdnetwork, render).',
+    'Phase 0 complete: the source is synced to android-latest-release and Cuttlefish host packages are installed and verified (groups shows kvm, cvdnetwork, render).',
     'Phase 1 complete: comfortable compiling C/C++, reading build errors, and running things on the command line.',
     'Disk and RAM verified (>= 400 GB free, >= 64 GB RAM) - a build is the heaviest thing you will run.',
   ]}
 />
 
+<KeywordSpotlight
+  terms={[
+    {
+      term: 'Soong',
+      full: 'The Modern AOSP Build System',
+      meaning: 'The build system introduced to replace GNU Make in Android. It parses declarative Android.bp files and generates optimized Ninja build graphs.',
+      context: 'All new modules, libraries, daemons, and apps in AOSP are defined using Soong.',
+    },
+    {
+      term: 'Blueprint',
+      full: 'Blueprint DSL (.bp)',
+      meaning: 'A declarative configuration format with JSON-like syntax written in Go. Unlike Makefiles, Blueprint has no control flow (no if-statements or loops) to enforce deterministic builds.',
+      context: 'The language you write whenever adding code or modifying dependencies in AOSP.',
+    },
+    {
+      term: 'Kati',
+      full: 'GNU Make Clone in Go/C++',
+      meaning: 'A tool that reads legacy Android.mk files and translates them directly into Ninja graphs without executing Make recursively.',
+      context: 'Bridges legacy vendor Makefiles until full migration to Soong is complete.',
+    },
+    {
+      term: 'Ninja',
+      full: 'Ninja Build Executor',
+      meaning: 'A tiny, lightning-fast execution engine whose sole purpose is to read graph files (build.ninja) and run compiler/linker commands in parallel.',
+      context: 'Neither Soong nor Kati compiles code; Ninja executes every single clang and rustc command.',
+    },
+    {
+      term: 'lunch',
+      full: 'Shell Function: lunch <target>',
+      meaning: 'An environment setup macro that sets environment variables (TARGET_PRODUCT, TARGET_BUILD_VARIANT, TARGET_ARCH) telling the build system what device image to build.',
+      context: 'The mandatory first command run before any AOSP compilation.',
+    },
+  ]}
+/>
+
 :::note Honest status of this page
-Authored against a 64-bit Linux target. Output blocks are marked **expected
-(author-run pending)** where not yet captured on a reference machine. Per this
-project's rule, output is shown verbatim once captured - never paraphrased.
+Authored against a 64-bit Linux target. Output blocks are marked **expected (author-run pending)** where not yet captured on a reference machine. Per this project's rule, output is shown verbatim once captured - never paraphrased.
 :::
 
-## 1. The build in one picture
+---
 
-AOSP does not use a single build tool. It is three layers:
+## 1. The Build Architecture: Soong, Kati, and Ninja
 
-| Tool | Language | Role |
-|------|----------|------|
-| **Soong** | **Blueprint** (`.bp`, Go-syntax) | The modern build: describes *what* to build (modules, sources, deps). |
-| **Kati** | `Android.mk` (GNU make) | The legacy layer, kept for the parts not yet migrated to Soong. |
-| **Ninja** | `build.ninja` | The actual executor: reads a graph and runs the exact commands, fast. |
+A common mistake for beginners is thinking that typing `m` runs a traditional Makefile. In reality, modern AOSP uses a multi-stage compilation pipeline:
 
-Soong and Kati both **generate** a Ninja graph; Ninja **runs** it. When you type
-`m`, the `envsetup.sh`/`build` wrapper orchestrates all of this.
+```text
+       ┌────────────────────────┐         ┌────────────────────────┐
+       │   Modern Android.bp    │         │    Legacy Android.mk   │
+       │   (Declarative Go/DSL) │         │    (GNU Make syntax)   │
+       └───────────┬────────────┘         └───────────┬────────────┘
+                   │                                  │
+                   ▼                                  ▼
+       ┌────────────────────────┐         ┌────────────────────────┐
+       │         Soong          │         │          Kati          │
+       │  (Evaluates Modules)   │         │ (Translates to Ninja)  │
+       └───────────┬────────────┘         └───────────┬────────────┘
+                   │                                  │
+                   └────────────────┬─────────────────┘
+                                    │ Generates
+                                    ▼
+                         ┌─────────────────────┐
+                         │   out/build.ninja   │
+                         │ (Exact Command DAG) │
+                         └──────────┬──────────┘
+                                    │
+                                    ▼
+                         ┌─────────────────────┐
+                         │     Ninja Tool      │
+                         │ (Parallel Compiler) │
+                         └──────────┬──────────┘
+                                    │ Invokes clang / rustc / dx
+                                    ▼
+                         ┌─────────────────────┐
+                         │ system.img / boot   │
+                         └─────────────────────┘
+```
 
-<WhyItWorked>
-This is why AOSP builds are fast on the second run: Ninja tracks every input and
-only re-runs commands whose inputs changed. Learning which layer to edit - a
-`.bp` (Soong) versus an `.mk` (Kati) - is the core skill of this phase.
-</WhyItWorked>
+<DeepDive title="Why Did Android Abandon GNU Make for Soong + Ninja?">
+In Android 6.0 and earlier, whole-tree Makefiles took over **15 minutes just to evaluate the build tree** before a single C++ file was compiled!
+- **GNU Make is Turing-complete**: Developers wrote complex shell scripts and recursive loops inside `Android.mk`, making builds non-deterministic and impossible to cache reliably.
+- **Soong enforces determinism**: `Android.bp` has **no variables, no conditionals, and no functions**. Everything is static data.
+- **Ninja is blazing fast**: Ninja doesn't know what C++ or Java is. It only knows inputs, outputs, and shell commands. If an input file hasn't changed its timestamp or hash, Ninja skips it instantly in milliseconds.
+</DeepDive>
 
-## 2. Set up the environment and choose a target
+---
 
-`lunch` selects a **target**: a product/device and a build variant. The format
-is `product_name-release_config-build_variant` (for example
-`aosp_cf_x86_64_only_phone-aosp_current-userdebug`).
+## 2. Setting Up the Shell and Selecting a Target (lunch)
+
+Before running the build, you must import AOSP's suite of shell helper functions (`lunch`, `m`, `croot`, `godir`) by sourcing `build/envsetup.sh`.
+
+```bash
+cd ~/aosp
+source build/envsetup.sh
+```
+
+Now select your target using `lunch`:
 
 <TestRunner
-  title="Source the environment, then lunch"
-  cmd={`cd aosp
-source build/envsetup.sh
-lunch aosp_cf_x86_64_only_phone-aosp_current-userdebug`}
+  title="Select the Cuttlefish x86_64 target"
+  cmd={`lunch aosp_cf_x86_64_only_phone-aosp_current-userdebug`}
   expect={`============================================
-PLATFORM_VERSION_CODENAME=...
-PLATFORM_VERSION=...
+PLATFORM_VERSION_CODENAME=REL
+PLATFORM_VERSION=17
 TARGET_PRODUCT=aosp_cf_x86_64_only_phone
 TARGET_BUILD_VARIANT=userdebug
 TARGET_ARCH=x86_64
-============================================
-
-(TARGET_PRODUCT and TARGET_BUILD_VARIANT must match what you passed to lunch.)`}
+TARGET_ARCH_VARIANT=x86_64
+HOST_ARCH=x86_64
+============================================`}
 />
 
-:::warning The `trunk_staging` form is outdated
-Older material used lunch strings like `aosp_<name>-trunk_staging-userdebug`.
-That release-config is no longer valid; use the `-aosp_current-` form above
-(the plan's corrected-command table, section 6.2).
-:::
+<DeepDive title="Dissecting the Target String Format">
+Modern Android lunch strings follow the strict 3-part syntax:
+`product_name-release_config-build_variant`
 
-## 3. First build with `m`
+For example: `aosp_cf_x86_64_only_phone-aosp_current-userdebug`:
+1. **`aosp_cf_x86_64_only_phone`**:
+   - `aosp_`: Standard open-source tree device configuration.
+   - `cf_`: Cuttlefish virtual reference device.
+   - `x86_64_only`: Builds purely 64-bit binaries without 32-bit legacy multilib overhead, cutting build time in half!
+   - `phone`: Phone profile packages.
+2. **`aosp_current`**:
+   - The trunk-stable release configuration defining active feature flags (replaces outdated `trunk_staging`).
+3. **`userdebug`**:
+   - The build variant.
+</DeepDive>
 
-`m` (from `envsetup.sh`) builds from the root of the tree. The first build is
-the long one. Later builds reuse Ninja's outputs.
+<ConceptComparison
+  title="Android Build Variants: user vs userdebug vs eng"
+  leftHeader="user"
+  rightHeader="userdebug / eng"
+  rows={[
+    {
+      feature: 'Root Access (adb root)',
+      left: 'Strictly disabled. ADB runs as unprivileged shell user (UID 2000).',
+      right: 'Supported! adb root restarts adbd with UID 0.',
+    },
+    {
+      feature: 'ro.debuggable Property',
+      left: '0 (production security mode; apps cannot be debugged unless manifest allows).',
+      right: '1 (all processes can be attached to by gdbclient / lldb).',
+    },
+    {
+      feature: 'SELinux Mode',
+      left: 'Strictly Enforcing. setenforce 0 is forbidden by the kernel.',
+      right: 'Enforcing by default, but setenforce 0 is permitted for debugging.',
+    },
+    {
+      feature: 'Intended Audience',
+      left: 'Consumer devices shipped to retail customers.',
+      right: 'Platform developers, automated testing, and QA teams.',
+    },
+  ]}
+/>
+
+---
+
+## 3. The Full Build with m
+
+Once `lunch` sets the target, type `m` to invoke the build:
+
+```bash
+m
+```
 
 <TestRunner
-  title="Build the default target (first build)"
+  title="Initial whole-tree compilation"
   cmd={`m`}
-  expect={`...
-[  0% 12/...] ...
-[  1% 340/...] ...
+  expect={`[  0% 12/154210] ...
+[  1% 1542/154210] ...
 ...
-#### build completed successfully (HH:MM:SS) ####
-
-(The first build can take a long time. Subsequent builds are incremental and
-finish in minutes or seconds.)`}
+[100% 154210/154210] ...
+#### build completed successfully (01:42:15) ####`}
 />
 
-:::note The source tree is read-only on Android 17+
-Modern AOSP checks the tree out read-only, so a build step that writes into the
-tree must be told it may. The documented switch is
-`BUILD_BROKEN_SRC_DIR_IS_WRITABLE=true`. You will need this when you edit a
-`.bp` and rebuild (section 4). It is expected behaviour, not a broken setup.
+:::warning Android 17 Read-Only Source Tree
+Android 17+ checks out the source tree as **read-only** to ensure build hermeticity and prevent rogue compiler steps from writing temporary files into the source directory.
+If a legacy script or custom tool attempts to write outside `out/`, the build will fail with a permission error.
+To allow writes while developing experimental modules, export:
+`export BUILD_BROKEN_SRC_DIR_IS_WRITABLE=true`
 :::
 
-<Checkpoint
-  quiz={{
-    question: 'What is the relationship between Soong, Kati, and Ninja?',
-    options: [
-      'Ninja replaces both Soong and Kati.',
-      'Soong and Kati describe/translate the build; both emit a Ninja graph; Ninja executes it.',
-      'Kati runs first and Soong runs the compiled result.',
-      'They are three names for the same tool.',
-    ],
-    answer: 1,
-    explain:
-      'Soong (Blueprint .bp) and Kati (Android.mk) are the description/translation layers. Both generate build.ninja, and Ninja is the executor that actually runs the commands.',
-  }}
-/>
+---
 
-## 4. Edit a `.bp` and rebuild incrementally
+## 4. Editing an Android.bp Module and Incremental Rebuilds
 
-Blueprint files declare modules. Here is a minimal `cc_library` you can add to
-see the build system pick up a new module. Put it somewhere it is referenced,
-or read it alongside an existing `.bp` to compare.
+In AOSP, every directory with code contains an `Android.bp` file describing its modules.
+
+Here is a typical C++ native library module:
 
 ```text
-// Example: a minimal Soong module (Blueprint / .bp syntax)
+// Android.bp
 cc_library {
-    name: "libhello",
-    srcs: ["hello.cpp"],
-    cflags: ["-Wall", "-Wextra"],
-    shared_libs: ["liblog"],
+    name: "libspine_sensor",
+    vendor_available: true,
+    srcs: [
+        "SensorManager.cpp",
+        "SensorReader.cpp",
+    ],
+    cflags: [
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+    ],
+    shared_libs: [
+        "libbase",
+        "liblog",
+        "libcutils",
+    ],
+    export_include_dirs: ["include"],
 }
 ```
 
-<DoThis
-  steps={[
-    'Open an existing Android.bp in the tree and read one module it declares.',
-    'Change something small and real: add a source file to an existing module, or add a cflag.',
-    'Rebuild with `m` and confirm only the affected targets rebuild.',
-    'Revert if you were experimenting; keep the tree clean.',
-  ]}
-/>
-
-<TestRunner
-  title="Incremental rebuild after a .bp edit"
-  cmd={`# after editing a .bp (and, on Android 17+, exporting the writable-tree override)
-export BUILD_BROKEN_SRC_DIR_IS_WRITABLE=true
-m`}
-  expect={`...
-[ 99% ...] ...
-#### build completed successfully (MM:SS) ####
-
-(An incremental build after a small .bp change should be far shorter than the
-first build. If it rebuilds everything, your change touched a common input.)`}
-/>
-
-<WhyItWorked>
-Soong reads your `.bp`, resolves the module graph, and regenerates the relevant
-Ninja edges. Because Ninja hashes inputs, only the modules whose inputs you
-changed (and their dependents) re-run. That is the payoff of separating
-description (Soong) from execution (Ninja).
-</WhyItWorked>
-
-## 5. Flash-free boot: run it on Cuttlefish
-
-Cuttlefish is a virtual device - no phone required. Phase 0 installed its host
-packages and added you to the `kvm`/`cvdnetwork`/`render` groups (after a
-reboot). Boot your freshly built images.
-
-<TestRunner
-  title="Launch Cuttlefish from your build output"
-  cmd={`# from the tree where you synced (the android-cuttlefish checkout)
-HOME=$PWD ./bin/launch_cvd --daemon`}
-  expect={`... (Cuttlefish starts its virtual device) ...
-(launch_cvd returns once the device is starting. WebRTC UI:
- https://localhost:8443 )`}
-/>
-
-Then confirm it is alive with the standard tooling:
-
-<TestRunner
-  title="Confirm the device booted"
-  cmd={`adb wait-for-device
-adb shell getprop sys.boot_completed`}
-  expect={`1
-
-(sys.boot_completed = 1 means the device finished booting. If adb is not found,
-run it from $ANDROID_HOST_OUT/bin, or add it to PATH.)`}
-/>
-
-<WhyItWorked>
-Cuttlefish runs the same images Android builds for real hardware, on your
-machine. Because you set `TARGET_PRODUCT=aosp_cf_x86_64_only_phone`, the build
-produced exactly the images Cuttlefish boots. This is the tightest loop this
-course offers: edit, rebuild, reboot - no physical device.
-</WhyItWorked>
-
-## Break It
-
-<BreakIt
+<CodeAnnotator
+  title="Dissecting Android.bp Properties"
   items={[
-    'Symptom: lunch fails with "Could not locate aapt" or "no product spec". Cause: you did not source build/envsetup.sh first, or the tree is not synced. Fix: source build/envsetup.sh, confirm the product name from the .../target/product/ dir, then lunch.',
-    'Symptom: the build stops writing into the tree with a read-only error. Cause: Android 17+ checks the tree out read-only. Fix: export BUILD_BROKEN_SRC_DIR_IS_WRITABLE=true before m, as documented.',
-    'Symptom: launch_cvd fails with a KVM or "permission denied" error. Cause: your shell is not in the kvm group (you skipped the post-usermod reboot). Fix: reboot, then confirm with groups that kvm, cvdnetwork, and render are present.',
+    {
+      syntax: 'name: "libspine_sensor"',
+      purpose: 'Unique Module Identifier',
+      explanation: 'Must be globally unique across all thousands of Android.bp files in the entire AOSP tree.',
+    },
+    {
+      syntax: 'vendor_available: true',
+      purpose: 'Project Treble Compatibility',
+      explanation: 'Allows both system partition (/system) and vendor partition (/vendor) binaries to link against this library.',
+    },
+    {
+      syntax: 'shared_libs: ["libbase", "liblog"]',
+      purpose: 'Dynamic Linking Dependencies',
+      explanation: 'Specifies .so libraries required at runtime. libbase provides Google C++ utilities; liblog provides __android_log_print.',
+    },
+    {
+      syntax: 'export_include_dirs: ["include"]',
+      purpose: 'Header Propagation',
+      explanation: 'Any other module that lists "libspine_sensor" in its shared_libs automatically inherits -Iinclude compiler flags.',
+    },
   ]}
 />
 
-## 6. Mastery check
+### Fast Module-Only Compilation
 
-Unassisted, complete a **clean build** of the Cuttlefish target and **boot it**.
-Concretely, you have:
+Instead of running a full `m` which checks the entire 150,000-target tree, you can compile **only your specific module**:
 
-- Sourced `envsetup.sh` and `lunch aosp_cf_x86_64_only_phone-aosp_current-userdebug` (section 2).
-- Run a full `m` that completed successfully (section 3).
-- Edited a `.bp` (or an equivalent real module change) and seen an **incremental** rebuild pick it up (section 4).
-- Launched Cuttlefish and confirmed `sys.boot_completed = 1` (section 5).
+```bash
+# Build only libspine_sensor and its immediate dependencies
+m libspine_sensor
+```
 
-**Spine artifact:** commit your `.bp` instrumentation change and the build/boot
-proof under `spine/02-instrumentation` in your Project Spine fork (plan section
-4.8). This is the artifact the competency map records for this phase.
+---
+
+## 5. Booting Cuttlefish Virtual Device
+
+Once the build finishes, your compiled partition images live in:
+`$ANDROID_PRODUCT_OUT` (`out/target/product/vsoc_x86_64/`).
+
+To boot your freshly built system on Cuttlefish:
+
+```bash
+launch_cvd --daemon
+```
+
+Verify that the device booted successfully:
+
+<TestRunner
+  title="Check Cuttlefish boot completion"
+  cmd={`adb devices
+adb shell getprop sys.boot_completed`}
+  expect={`List of devices attached
+0.0.0.0:6520	device
+
+1`}
+/>
+
+Access the visual interactive screen of your running Cuttlefish Android device by opening your browser to:
+**`https://localhost:8443`**
+
+---
+
+## Mastery Check
+
+<Checkpoint
+  quiz={{
+    question: 'Why does Ninja make incremental builds fast in AOSP?',
+    options: [
+      'It stores all compiled machine code in the cloud.',
+      'It reads a pre-evaluated dependency DAG and only executes commands whose input file timestamps or hashes have changed.',
+      'It re-runs all Makefiles from scratch with multithreading.',
+      'It skips linking shared libraries when code changes.',
+    ],
+    answer: 1,
+    explain:
+      'Ninja operates on a static directed acyclic graph (DAG). Because it does not perform parsing or conditional evaluation, it immediately identifies and runs only the stale commands.',
+  }}
+/>
+
+<Checkpoint
+  quiz={{
+    question: 'What is the primary difference between a user build and a userdebug build?',
+    options: [
+      'user builds omit the Linux kernel.',
+      'user builds disable root access (adb root) and enforce production security restrictions (ro.debuggable=0).',
+      'user builds can only run 32-bit apps.',
+      'userdebug builds do not include the Android framework.',
+    ],
+    answer: 1,
+    explain:
+      'user builds are production-hardened with root disabled and debugging restricted, whereas userdebug enables adb root and full debugging hooks.',
+  }}
+/>
+
+## Reward
 
 <Reward xp="500" badge="Build System Driver" />
 

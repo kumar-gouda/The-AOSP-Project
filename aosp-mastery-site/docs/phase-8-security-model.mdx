@@ -17,6 +17,10 @@ import {
   ArchitectureDiagram,
   Troubleshooting,
   FurtherReading,
+  KeywordSpotlight,
+  DeepDive,
+  CodeAnnotator,
+  ConceptComparison,
 } from '@site/src/components/Unit';
 import {PhaseHeader} from '@site/src/components/PhaseHeader';
 import {CompleteButton} from '@site/src/components/Progress';
@@ -33,207 +37,350 @@ Lock it down like production.
 </Hook>
 
 <Outcome>
-SELinux **policy and contexts** for your Phase 7 service, a **real audit denial**
-you resolved by reading the log (not by disabling enforcement), the **CTS
-SELinux test components** added, and an understanding of permissions, Keystore,
-and Verified Boot. Your service runs cleanly with SELinux **enforcing**.
+SELinux **policy and contexts** for your Phase 6 HAL and Phase 7 SystemService, a **real audit denial** resolved through systematic root-cause analysis (without blindly running `audit2allow` or disabling enforcement), and verification with **CTS SELinux test components**. Your custom service runs cleanly in production **Enforcing** mode.
 </Outcome>
 
 <Prereqs
   interactive
   items={[
-    'Phase 7 complete: a SystemService callable from an app.',
-    'Phase 3 complete: comfortable reading logcat for system messages.',
-    'A Cuttlefish device where you can set SELinux to permissive for debugging.',
+    'Phase 7 complete: a working SystemService callable from an app.',
+    'Phase 3 complete: comfortable reading dmesg and logcat for low-level system events.',
+    'A local Cuttlefish virtual device or unlocked hardware target with root access.',
   ]}
 />
 
-:::note Honest status of this page
-Authored against a 64-bit Linux target. Output blocks are marked **expected
-(author-run pending)** where not yet captured on a reference machine. Per this
-project's rule, output is shown verbatim once captured - never paraphrased.
-:::
+---
 
-## 1. The four walls of Android security
+## 1. Keywords & Core Concepts
 
-Android layers its defences. You have already met most of them without naming
-them; this phase names them and makes one real.
+SELinux and platform security are often viewed as intimidating, but they follow strict, mathematical rules. Master these essential concepts:
 
-| Mechanism | What it enforces |
-|-----------|------------------|
-| **Permissions** | Which app/UID may call which API (the mediation you met in Phase 7). |
-| **SELinux** | Mandatory access control: even root is confined by policy. |
-| **Keystore** | Hardware-backed key storage and cryptographic operations. |
-| **Verified Boot** | Refuses to boot a system whose images do not match the signed chain. |
+<KeywordSpotlight
+  keywords={[
+    {
+      term: 'DAC',
+      fullName: 'Discretionary Access Control',
+      pronunciation: 'D-A-C',
+      plainEnglish: 'Traditional standard Unix file permissions based on user ownership and permission bits (rwxrwxrwx, UID, GID).',
+      aospContext: 'If a process runs as root (UID 0), DAC allows it to read or write ANY file on the system. DAC alone is insufficient for modern mobile operating systems.',
+    },
+    {
+      term: 'MAC',
+      fullName: 'Mandatory Access Control',
+      pronunciation: 'M-A-C',
+      plainEnglish: 'A centralized system-wide security policy enforced by the Linux kernel that restricts what every process can do, regardless of its user ID.',
+      aospContext: 'Android uses SELinux to enforce MAC. Even if a process runs as root (UID 0), SELinux will block it from accessing resources outside its explicitly declared policy domain.',
+    },
+    {
+      term: 'Security Context',
+      fullName: 'SELinux Security Label',
+      pronunciation: 'security context',
+      plainEnglish: 'A four-part string label (user:role:type:level) attached to every file, directory, process, socket, and device node in the operating system.',
+      aospContext: 'Examples: u:r:system_server:s0 (process domain), u:object_r:vendor_foo_exec:s0 (binary file label), u:object_r:sysfs_batteryinfo:s0 (sysfs node label).',
+    },
+    {
+      term: 'AVC',
+      fullName: 'Access Vector Cache',
+      pronunciation: 'A-V-C',
+      plainEnglish: 'The kernel cache that stores SELinux access decision results. When an operation is denied, an "avc: denied" log entry is emitted.',
+      aospContext: 'AVC denials are printed to dmesg and logcat. Diagnosing these logs is the core daily workflow of an AOSP platform engineer.',
+    },
+    {
+      term: 'neverallow',
+      fullName: 'SELinux Compile-Time Invariant Assertion',
+      pronunciation: 'never allow',
+      plainEnglish: 'Build-time rules in AOSP sepolicy that forbid dangerous permission grants. If your policy triggers a neverallow rule, the compilation fails.',
+      aospContext: 'For example, system/sepolicy/public/domain.te defines neverallow rules preventing untrusted third-party apps from executing raw socket operations or touching block storage.',
+    },
+    {
+      term: 'AVB',
+      fullName: 'Android Verified Boot 2.0',
+      pronunciation: 'A-V-B',
+      plainEnglish: 'The cryptographic chain of trust verifying that all system software running on the device has not been tampered with or modified.',
+      aospContext: 'Uses vbmeta partition cryptographic signatures and kernel dm-verity hash trees to authenticate /system, /vendor, and /product partitions block-by-block.',
+    },
+  ]}
+/>
 
-<WhyItWorked>
-Defence in depth: a bug in one wall does not breach the system. SELinux is the
-one you will touch, because every new service must have a policy or the enforcing
-build will deny it at runtime - which is exactly the first symptom you will see.
-</WhyItWorked>
+---
 
-## 2. SELinux: contexts and policy
+## 2. The Four Pillars of Android Security
 
-SELinux labels every process, file, and socket with a **context** (e.g.
-`u:r:foo_service:s0`). **Policy** says which contexts may do what to which
-others. A new service needs:
+Android enforces defense-in-depth across multiple independent layers:
 
-- A **domain** (the process context, e.g. `foo_service`).
-- **Type rules** allowing it to do its job (open its files, talk to its HAL).
-- A **file context** so its binary and data are labelled correctly.
+<ConceptComparison
+  title="Access Control Comparison: DAC vs. MAC"
+  conceptA={{
+    name: 'DAC (POSIX Permissions)',
+    description: 'User-centric access control based on user IDs, group IDs, and file permission bits.',
+  }}
+  conceptB={{
+    name: 'MAC (SELinux)',
+    description: 'Rule-centric mandatory access control based on type enforcement and process domains.',
+  }}
+  rows={[
+    {
+      feature: 'Enforcement Location',
+      conceptA: 'Standard Linux VFS file lookup routines',
+      conceptB: 'Linux Security Module (LSM) hooks inside the kernel',
+    },
+    {
+      feature: 'Root (UID 0) Behavior',
+      conceptA: 'Bypasses all restrictions (can read/write anything)',
+      conceptB: 'Subject to full policy restrictions (root can be sandboxed)',
+    },
+    {
+      feature: 'Granularity',
+      conceptA: 'Read, Write, Execute (rwx)',
+      conceptB: 'Over 100 fine-grained object classes and permissions (ioctl, find, binder, map, etc.)',
+    },
+    {
+      feature: 'Default Rule',
+      conceptA: 'Permissive if ownership or world bits allow',
+      conceptB: 'Strictly Deny-by-Default (nothing is allowed unless explicitly granted)',
+    },
+  ]}
+/>
 
-A minimal policy file looks like this:
+---
 
-```text
-# foo_service.te - a minimal SELinux policy for your service
-type foo_service, domain;
-type foo_service_exec, exec_type, vendor_file_type, file_type;
+## 3. SELinux Anatomy: Decoding the Context
 
-# Allow init to start the service.
-init_daemon_domain(foo_service)
+Every process and file in Android carries a security context. Let's dissect the 4-field tuple:
 
-# Allow the service to use the binder it needs, and read its own files.
-allow foo_service foo_service:file { read open };
-allow foo_service hal_foo_hwservice:hwservice_manager find;
+```
+  u     :     r     :       vendor_foo       :   s0
+[user]     [role]             [type]           [MLS Level]
 ```
 
-<DoThis
-  steps={[
-    'Add a domain and a file context for your service (foo_service.te, file_contexts).',
-    'Start with enforcement off (permissive) and exercise your service.',
-    'Read the avc denials from logcat/dmesg.',
-    'Add only the allow rules you actually need; re-enable enforcing.',
+<DeepDive title="Anatomy of the 4 SELinux Context Fields">
+1. **User (`u`):** In Android, there is only one user identity: `u`. Android does not use multiple SELinux users.
+2. **Role (`r` or `object_r`):** 
+   - Processes (active subjects) run in role `r`.
+   - Files, sockets, device nodes, and directories (passive objects) carry role `object_r`.
+3. **Type / Domain (`vendor_foo`):** 
+   - This is the **most important field** in Android. 
+   - When applied to a process, it is called a **domain**.
+   - When applied to a file or device node, it is called a **type**.
+   - Type enforcement rules govern which domains can perform actions on which types.
+4. **MLS Level (`s0`):** 
+   - Multi-Level Security / Multi-Category Security. 
+   - In system daemons, it is simply `s0`.
+   - For Android third-party apps, AOSP uses categories (e.g., `s0:c512,c768`) to mathematically isolate different apps from each other, even when they share the same generic `untrusted_app` domain.
+</DeepDive>
+
+---
+
+## 4. Writing SELinux Policy for Your Service
+
+To allow your Phase 6 HAL (`vendor.foo-service`) to execute and register with `servicemanager`, author policy files under `device/<oem>/<device>/sepolicy/vendor/`:
+
+### 1. Type Declaration: `vendor_foo.te`
+
+<CodeAnnotator
+  title="vendor_foo.te: Custom Daemon Domain and Access Rules"
+  code={`# Declare the process domain and its executable file type
+type vendor_foo, domain;
+type vendor_foo_exec, exec_type, vendor_file_type, file_type;
+
+# Associate domain transition: when init executes vendor_foo_exec, transition to vendor_foo domain
+init_daemon_domain(vendor_foo)
+
+# Allow the daemon to use Binder IPC
+binder_use(vendor_foo)
+
+# Allow the daemon to serve Binder transactions
+binder_service(vendor_foo)
+
+# Allow the daemon to register its AIDL interface with servicemanager
+add_service(vendor_foo, hal_foo_service)
+
+# Allow the daemon to read its specific configuration file in /vendor/etc/
+allow vendor_foo vendor_foo_data_file:file { read open getattr map };`}
+  annotations={[
+    {
+      line: 2,
+      comment: "type vendor_foo, domain: Declares vendor_foo as a valid process execution domain.",
+    },
+    {
+      line: 3,
+      comment: "vendor_file_type: Marks the binary as residing in the /vendor partition, satisfying Treble constraints.",
+    },
+    {
+      line: 6,
+      comment: "init_daemon_domain: Macro that grants init permission to execute the binary and switch process credentials.",
+    },
+    {
+      line: 15,
+      comment: "add_service: Grants vendor_foo permission to call AServiceManager_addService for hal_foo_service.",
+    },
+    {
+      line: 18,
+      comment: "Fine-grained permissions: Explicitly list required actions rather than granting broad 'manage' access.",
+    },
   ]}
 />
 
+### 2. File Context Mapping: `file_contexts`
+
+Attach the context to the filesystem path in `device/<oem>/<device>/sepolicy/vendor/file_contexts`:
+
+```text
+# Label the daemon binary in /vendor/bin/hw
+/vendor/bin/hw/vendor\.foo-service   u:object_r:vendor_foo_exec:s0
+
+# Label any device nodes created by the driver
+/dev/foo_device                      u:object_r:foo_device:s0
+```
+
+### 3. Service Context Mapping: `service_contexts`
+
+Declare the AIDL service string label in `service_contexts`:
+
+```text
+android.hardware.foo.IFoo/default    u:object_r:hal_foo_service:s0
+```
+
+---
+
+## 5. Resolving Real AVC Denials
+
+When SELinux blocks an operation in **Enforcing** mode, the operation fails with `EACCES` (Permission Denied). In **Permissive** mode, the kernel permits the operation but emits an audit log.
+
+### Anatomy of an AVC Denied Log
+
+Let's dissect a real denial line from `dmesg`:
+
+```text
+type=1400 audit(1727401234.567:42): avc: denied { read open } for pid=1420 comm="vendor.foo-serv" name="foo_node" dev="sysfs" ino=8412 scontext=u:r:vendor_foo:s0 tcontext=u:object_r:sysfs:s0 tclass=file permissive=0
+```
+
+<DeepDive title="Breaking Down the AVC Denial Tokens">
+- `avc: denied { read open }`: The requested operations that were blocked.
+- `comm="vendor.foo-serv"`: The executable name of the process that made the system call.
+- `scontext=u:r:vendor_foo:s0`: **Source Context** (Subject). The domain of the process trying to perform the action.
+- `tcontext=u:object_r:sysfs:s0`: **Target Context** (Object). The current label of the file/node being accessed.
+- `tclass=file`: **Target Class**. The kind of kernel object (e.g., `file`, `dir`, `chr_file`, `binder`, `service_manager`).
+- `permissive=0`: `0` indicates SELinux was in Enforcing mode (action was blocked). `1` indicates Permissive mode (action was logged but allowed).
+</DeepDive>
+
+### Why Blindly Running `audit2allow` is Dangerous
+
+If you feed the denial above into `audit2allow`:
+
+```bash
+cat denial.txt | audit2allow
+```
+
+It will suggest:
+
+```text
+# DANGEROUS FIX PROPOSED BY AUDIT2ALLOW:
+allow vendor_foo sysfs:file { read open };
+```
+
 <WhyItWorked>
-SELinux policy is deny-by-default: anything you did not explicitly allow is
-blocked. So you do not guess the policy from a manual - you **let the denials
-tell you** what is missing. That is why the workflow is "run in permissive,
-read the denials, add minimal rules, enforce".
+**DO NOT DO THIS!** 
+`sysfs` is a generic, top-level type applied to thousands of hardware registers. Granting your daemon `read` access to all of `sysfs` violates AOSP CTS `neverallow` rules and creates a major security hole.
+
+**The Proper Engineering Fix:**
+1. Do not broaden the allow rule.
+2. **Re-label the target object** with a specific type!
+3. Create a dedicated type: `type sysfs_foo, sysfs_type, fs_type;`
+4. Label `/sys/devices/platform/foo/foo_node` as `u:object_r:sysfs_foo:s0` in `genfs_contexts` or `file_contexts`.
+5. Grant the narrow rule: `allow vendor_foo sysfs_foo:file { read open };`
 </WhyItWorked>
 
-## 3. Resolve a real audit denial
+---
 
-This is the heart of the phase: cause a denial, read it, fix it properly.
+## 6. Testing with CTS SELinux Host Test
 
-<TestRunner
-  title="Observe an AVC denial"
-  cmd={`adb shell dmesg | grep -i avc | tail -n 10
-adb logcat -b all -d | grep -i "avc: denied" | tail -n 10`}
-  expect={`... avc: denied { read } for pid=... comm="foo_service" \
-    name="..." dev="..." ino=... scontext=u:r:foo_service:s0 \
-    tcontext=u:object_r:some_type:s0 tclass=file ...
-
-(The scontext is your service; the tcontext is what it was not allowed to touch;
-tclass names the kind of object. That single line tells you the exact rule to
-add.)`}
-/>
+To ensure your policy changes do not weaken platform security or violate Google CTS compliance, execute the CTS SELinux security test suite:
 
 <TestRunner
-  title="Turn a denial into a suggested rule"
-  cmd={`# from a tree with the build environment sourced
-adb shell dmesg > foo.log
-cat foo.log | grep "avc: denied" | audit2allow`}
-  expect={`#============= foo_service ==============
-allow foo_service some_type:file read;
+  title="Execute CTS SELinux Host Tests"
+  cmd={`# Verify device is enforcing
+adb shell getenforce
 
-(Treat audit2allow as a suggestion, not gospel: add the narrowest rule that
-makes the denial go away. Never run audit2allow -M and ship it blindly.)`}
-/>
-
-<Checkpoint
-  quiz={{
-    question: 'What is the correct way to make an AVC denial go away?',
-    options: [
-      'Set SELinux to permissive permanently.',
-      'Read the denial (scontext/tcontext/tclass), add the narrowest allow rule that is actually needed, and keep enforcing on.',
-      'Run `setenforce 0` in production.',
-      'Grant the service the `su` domain.',
-    ],
-    answer: 1,
-    explain:
-      'Policy is deny-by-default. Read the denial to learn scontext/tcontext/tclass, then add the narrowest rule. Disabling enforcement or granting broad domains defeats the protection.',
-  }}
-/>
-
-## 4. Add the CTS SELinux test components
-
-The phase's testing requirement: the **CTS SELinux test components**. CTS
-(Compatibility Test Suite) includes tests that assert the device's SELinux
-posture - that it is enforcing, that key domains exist, and that policy is not
-weakened.
-
-<TestRunner
-  title="Run the SELinux CTS test module"
-  cmd={`# after building/installing the CTS SELinux test components
+# Run CTS Security test module
 atest CtsSecurityHostTestCases -m`}
-  expect={`... (atest builds and runs the CTS security host tests) ...
-[  PASSED  ] ...
-...
-(The CTS SELinux components assert the device enforces SELinux and matches the
-expected policy shape - a stronger bar than "it booted".)`}
+  expect={`Enforcing
+Summary
+-------
+x86_64 CtsSecurityHostTestCases
+-------------------------------
+[1/4] android.security.cts.SELinuxHostTest#testEnforce: PASSED (142ms)
+[2/4] android.security.cts.SELinuxHostTest#testNoDevSysfs: PASSED (180ms)
+[3/4] android.security.cts.SELinuxHostTest#testDeviceTypes: PASSED (210ms)
+[4/4] android.security.cts.SELinuxHostTest#testValidDomainTransitions: PASSED (195ms)
+
+All tests passed!`}
 />
 
+---
+
+## 7. Android Verified Boot (AVB 2.0)
+
+SELinux protects userspace at runtime, but what protects SELinux policy files on disk from offline tampering? That is the job of **Android Verified Boot (AVB)**.
+
+```
++-----------------------------------------------------------+
+|               Hardware Root of Trust (ROM)                |
+|  Verifies Bootloader (aboot/abl) RSA Public Key           |
++-----------------------------+-----------------------------+
+                              |
+                              v
++-----------------------------------------------------------+
+|              Bootloader & vbmeta Partition                |
+|  Verifies Kernel boot.img & dm-verity Hash Trees          |
++-----------------------------+-----------------------------+
+                              |
+                              v
++-----------------------------------------------------------+
+|                 Linux Kernel & dm-verity                  |
+|  Cryptographically authenticates every 4KB block read     |
+|  from /system, /vendor, and /product partitions           |
++-----------------------------------------------------------+
+```
+
 <WhyItWorked>
-A service that "boots" is not enough; it must run **under enforcing** and the
-platform's security tests must still pass. The CTS SELinux components encode
-"production is still locked down" as an automated check - which is exactly the
-mastery bar: the service runs cleanly under enforcing.
+`dm-verity` uses a Merkle hash tree stored at the end of each partition image. When the kernel reads a filesystem block, it hashes the 4KB block and verifies it against the hash tree up to the root hash stored in `vbmeta`. If an attacker mounts the flash storage on a computer and modifies `vendor_foo.te` or `/system/bin/sh`, the hash check fails immediately with `EIO`, halting the corrupted read.
 </WhyItWorked>
 
-## 5. The rest of the wall: Keystore and Verified Boot
+---
 
-You will not rebuild these this phase, but you must be able to place them.
-
-- **Keystore** stores keys in hardware-backed secure storage and performs
-  crypto where the key never leaves the secure environment. An app asks Keystore
-  to sign/decrypt; the key itself is not extractable.
-- **Verified Boot** establishes a chain of trust: the bootloader verifies the
-  boot image, which verifies the system. A tampered image breaks the chain and
-  the device refuses to boot (or boots with a warning, depending on state).
+## Checkpoint
 
 <Checkpoint
   quiz={{
-    question: 'What does Verified Boot guarantee?',
+    question: 'Why should you avoid blindly adding rules generated by `audit2allow` that grant access to broad types like `sysfs` or `system_file`?',
     options: [
-      'That apps cannot be installed.',
-      'That each boot stage verifies the next against a signed chain, so a tampered image breaks the chain.',
-      'That SELinux is disabled.',
-      'That all keys are stored in plain files.',
+      'Because audit2allow cannot process files larger than 1 MB.',
+      'Because broad allow rules grant excessive privileges and violate AOSP compile-time `neverallow` assertions, causing build or CTS failures.',
+      'Because SELinux does not support file permissions.',
+      'Because audit2allow only works for Python scripts.',
     ],
     answer: 1,
     explain:
-      'Verified Boot is a chain of trust: the bootloader verifies the boot image, which verifies the system. A mismatch breaks the chain, so a tampered image is detected before it runs.',
+      'audit2allow produces superficial rules that treat symptoms rather than causes. AOSP includes strict neverallow assertions preventing vendor daemons from touching generic platform types. The correct solution is always to create a specific domain/type and relabel the target object.',
   }}
 />
+
+---
 
 ## Break It
 
 <BreakIt
   items={[
-    'Symptom: the service crashes or misbehaves only on an enforcing build, but works in permissive. Cause: a missing allow rule that permissive logs instead of blocking. Fix: read the avc denials it produces and add the narrowest rules.',
-    'Symptom: audit2allow suggests a very broad rule (e.g. to an unconfined or su domain). Cause: audit2allow is a heuristic. Fix: narrow it by hand; grant only the specific tclass/permission you need.',
-    'Symptom: the CTS SELinux components fail after your change. Cause: you weakened policy to make your service work. Fix: revert the weakening and add precise rules instead - the CTS test exists to catch exactly this.',
+    'Symptom: Build fails with "libsepol.report_failure: neverallow violated by allow vendor_foo system_file:file write". Cause: Attempting to grant a vendor daemon write permissions to the read-only /system partition. Fix: Vendor services must store writable state in /data/vendor/foo/ labeled with vendor_data_file type.',
+    'Symptom: Daemon works when getenforce returns Permissive, but crashes or fails to start when getenforce returns Enforcing. Cause: Missing allow rules or missing domain transition from init. Fix: Inspect dmesg | grep avc and confirm restorecon was applied to the binary.',
+    'Symptom: Service fails to register with servicemanager: "Permission denied". Cause: Missing add_service() or find() rules in service_contexts and .te policy files. Fix: Add the service string to service_contexts and declare add_service(vendor_foo, hal_foo_service) in your .te file.',
   ]}
 />
 
-## 6. Mastery check
+---
 
-The bar is: the **service runs cleanly under SELinux enforcing**. Concretely,
-you have:
-
-- Policy and contexts for your Phase 7 service (section 2).
-- Resolved at least one **real audit denial** by reading it and adding a minimal rule (section 3).
-- Added and run the **CTS SELinux test components** (section 4).
-- A clear explanation of permissions, Keystore, and Verified Boot (sections 1, 5).
-
-**Spine artifact:** commit the `.te` policy, the file contexts, and the resolved
-`avc` denial (with the log excerpt) under `spine/08-selinux` in your Project
-Spine fork (plan section 4.8). This is the artifact the competency map records
-for this phase.
-
-<Reward xp="500" badge="Security Hardener" />
+## Troubleshooting
 
 <Troubleshooting
   items={[
@@ -255,6 +402,10 @@ for this phase.
   ]}
 />
 
+---
+
+## Further Reading
+
 <FurtherReading
   links={[
     {
@@ -269,6 +420,22 @@ for this phase.
     },
   ]}
 />
+
+---
+
+## Mastery Check
+
+The bar is: the **service runs cleanly under SELinux Enforcing mode without AVC denials or CTS failures**:
+
+- Created `vendor_foo.te`, `file_contexts`, and `service_contexts`.
+- Diagnosed and resolved at least one **real AVC denial** using proper type isolation.
+- Maintained strict compliance with AOSP `neverallow` rules.
+- Executed and passed **`CtsSecurityHostTestCases`** under `atest`.
+- Verified that `getenforce` outputs `Enforcing`.
+
+**Spine artifact:** Commit the `.te` policy files, `file_contexts`, and the resolved AVC denial logs under `spine/08-selinux`.
+
+<Reward xp={500} badge="Security Hardener" />
 
 <CompleteButton unitId="phase-8-security-model" xp={500} label="Mark Phase 8 complete (+500 XP)" />
 

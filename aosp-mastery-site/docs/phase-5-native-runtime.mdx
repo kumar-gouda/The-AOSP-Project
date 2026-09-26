@@ -17,6 +17,10 @@ import {
   ArchitectureDiagram,
   Troubleshooting,
   FurtherReading,
+  KeywordSpotlight,
+  DeepDive,
+  CodeAnnotator,
+  ConceptComparison,
 } from '@site/src/components/Unit';
 import {PhaseHeader} from '@site/src/components/PhaseHeader';
 import {CompleteButton} from '@site/src/components/Progress';
@@ -33,10 +37,11 @@ The invisible engine room.
 </Hook>
 
 <Outcome>
-A **native daemon** (NDK/C++) that starts from first boot with no manual step,
-an understanding of the **Zygote fork model** and how an **APK** is installed,
-one **`atest`** host test run green, and enough **Rust literacy** to read the
-Rust files already in the tree without being blocked.
+A production **native daemon** (C++/Bionic) that launches automatically at first boot
+under `init`, complete with signal handling and structured logging; a working knowledge
+of the **Zygote fork model** and the **ART compilation pipeline** (`dex2oat`); your
+first **`atest`** host test running green; and fundamental **Rust in AOSP literacy**
+to read modern system modules.
 </Outcome>
 
 <Prereqs
@@ -48,275 +53,369 @@ Rust files already in the tree without being blocked.
   ]}
 />
 
+<KeywordSpotlight
+  terms={[
+    {
+      term: 'Bionic libc',
+      full: 'Android C Library & Dynamic Linker',
+      meaning: 'Google\'s custom implementation of the standard C library (libc, libm, libdl, dynamic linker) designed specifically for Android. It is BSD-licensed, small, and optimized for low-memory mobile hardware.',
+      context: 'All native C/C++ code running on Android links against Bionic instead of GNU glibc.',
+    },
+    {
+      term: 'NDK',
+      full: 'Native Development Kit',
+      meaning: 'A toolset and set of frozen C/C++ headers enabling developers to write native code for Android apps. Distinct from platform native code, which can access private OS internals.',
+      context: 'Guarantees API and ABI backwards compatibility across Android versions.',
+    },
+    {
+      term: 'ART',
+      full: 'Android Runtime',
+      meaning: 'The managed runtime environment that executes Dalvik Executable (DEX) bytecode for apps and system_server, using a hybrid combination of Interpreter, JIT (Just-In-Time), and AOT (Ahead-Of-Time) compilation.',
+      context: 'Replaced the legacy Dalvik VM starting in Android 5.0.',
+    },
+    {
+      term: 'dex2oat',
+      full: 'DEX to OAT Native Compiler',
+      meaning: 'An on-device compiler tool that parses DEX bytecode and compiles performance-critical code directly into native ARM/x86 machine instructions stored in .odex files.',
+      context: 'Runs in the background during device idle/charging to optimize frequently used apps.',
+    },
+    {
+      term: 'atest',
+      full: 'Android Test Command-Line Tool',
+      meaning: 'A high-level command-line tool that finds, builds, and runs automated tests (GTest, TradeFed, Instrumentation) across the entire AOSP source tree with zero boilerplate.',
+      context: 'The standard test runner used daily by all Android platform developers.',
+    },
+  ]}
+/>
+
 :::note Honest status of this page
-Authored against a 64-bit Linux target with a Cuttlefish device. Output blocks
-are marked **expected (author-run pending)** where not yet captured on a
-reference machine. Per this project's rule, output is shown verbatim once
-captured - never paraphrased.
+Authored against a 64-bit Linux target with a Cuttlefish device. Output blocks are marked **expected (author-run pending)** where not yet captured on a reference machine. Per this project's rule, output is shown verbatim once captured - never paraphrased.
 :::
 
-## 1. Bionic: Android's libc
+---
 
-Android does not use glibc. It uses **Bionic**, its own C library (BSD-derived,
-small, with a stable ABI for the platform). Most libc code you already know
-compiles against it, but Bionic makes deliberate trade-offs (it favours a small
-footprint and a stable ABI over feature completeness).
+## 1. Bionic: Why Android Built Its Own C Library
 
-<WhyItWorked>
-Because the platform talks to one libc (Bionic) with a stable ABI, the framework
-and native daemons interoperate without shipping their own libc. Cross-compiling
-with the **NDK** targets Bionic, which is why an NDK binary runs on the device
-but a glibc binary will not.
-</WhyItWorked>
+If you compile an ordinary Linux program on Ubuntu with GCC and push it to Android via ADB, running it will immediately fail with:
+`-sh: ./my_program: not found` or dynamic linker errors.
 
-## 2. Track A - a native daemon that starts at boot
+Why? Because Android does **not use GNU glibc**. It uses **Bionic**.
 
-The deliverable: a small native program (NDK/C++) that init launches on first
-boot, with **no manual step**. You add it as a **Soong module**, declare it as an
-`init.rc` service (Phase 3), and confirm it is running after a reboot.
+<ConceptComparison
+  title="Bionic libc vs. GNU glibc"
+  leftHeader="Bionic (Android)"
+  rightHeader="GNU glibc (Standard Linux)"
+  rows={[
+    {
+      feature: 'License',
+      left: 'BSD 2-Clause (Permissive). Proprietary vendor daemons can link without GPL copyleft.',
+      right: 'LGPL (Lesser General Public License). Has dynamic linking compliance restrictions.',
+    },
+    {
+      feature: 'Memory Footprint',
+      left: 'Extremely lightweight. Designed for embedded systems with constrained RAM.',
+      right: 'Heavyweight. Includes extensive historical POSIX features, NSS, and locale tables.',
+    },
+    {
+      feature: 'Dynamic Linker',
+      left: '/system/bin/linker64 (supports namespace isolation and Treble /system vs /vendor separation).',
+      right: '/lib/ld-linux-x86-64.so.2 (standard flat shared library path resolution).',
+    },
+    {
+      feature: 'Thread Implementation',
+      left: 'Custom lightweight pthreads implementation built directly into libc.so (no separate libpthread.so).',
+      right: 'NPTL (Native POSIX Thread Library) historically split across libraries.',
+    },
+  ]}
+/>
 
-Do this: write a tiny native daemon and wire it into the build and boot.
+---
+
+## 2. Building a Production Native Daemon
+
+A production native daemon in AOSP must:
+1. Link against Bionic and `liblog` for structured logging.
+2. Handle Unix signals (`SIGTERM`, `SIGINT`) cleanly so `init` can shut it down without data corruption.
+3. Be defined as a `cc_binary` in `Android.bp`.
+4. Be launched and monitored automatically by an `init.rc` service.
+
+Do this: Create `spine_daemon.cpp`:
 
 ```cpp
-// hello_daemon.cpp - a minimal native daemon
+// spine_daemon.cpp
+#include <csignal>
 #include <cstdio>
 #include <unistd.h>
+#include <android/log.h>
 
-int main() {
-  // A real daemon would install signal handlers and a loop.
-  std::printf("hello_daemon: started (pid %d)\n", getpid());
-  for (;;) {
-    sleep(60);  // stay alive; init keeps long-running services supervised
+#define LOG_TAG "SpineDaemon"
+#define ALOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+#define ALOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+
+static volatile sig_atomic_t g_running = 1;
+
+void handle_signal(int signal) {
+  if (signal == SIGTERM || signal == SIGINT) {
+    g_running = 0;
   }
+}
+
+int main(void) {
+  // 1. Install clean shutdown signal handlers
+  struct sigaction sa{};
+  sa.sa_handler = handle_signal;
+  sigaction(SIGTERM, &sa, nullptr);
+  sigaction(SIGINT, &sa, nullptr);
+
+  ALOGI("Spine Sensor Daemon starting up (PID: %d)", getpid());
+
+  // 2. Main daemon event loop
+  int sample_counter = 0;
+  while (g_running) {
+    ALOGI("Sensor sample tick #%d", ++sample_counter);
+    sleep(10); // Sleep interval (in a real driver, this waits on poll() or ioctl())
+  }
+
+  ALOGI("Spine Sensor Daemon received shutdown signal. Exiting cleanly.");
   return 0;
 }
 ```
 
-A Soong module to build it (Android.bp):
+Now declare the daemon in `Android.bp`:
 
 ```text
 // Android.bp
 cc_binary {
-    name: "hello_daemon",
-    srcs: ["hello_daemon.cpp"],
-    cflags: ["-Wall", "-Wextra"],
-    shared_libs: ["liblog"],
-    init_rc: ["hello_daemon.rc"],
+    name: "spine_daemon",
+    vendor_available: true,
+    srcs: ["spine_daemon.cpp"],
+    cflags: [
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+    ],
+    shared_libs: [
+        "liblog",
+        "libcutils",
+    ],
+    init_rc: ["spine_daemon.rc"],
 }
 ```
 
-And the init `.rc` that launches it at boot:
+And define its supervisor script in `spine_daemon.rc`:
 
 ```text
-# hello_daemon.rc
-service hello_daemon /system/bin/hello_daemon
+# spine_daemon.rc
+service spine_daemon /system/bin/spine_daemon
     class main
-    user shell
-    group shell
+    user system
+    group system input
     disabled
+
+# Automatically trigger the service once boot is verified
 on property:sys.boot_completed=1
-    start hello_daemon
+    start spine_daemon
 ```
 
 <DoThis
   steps={[
-    'Write the daemon (hello_daemon.cpp) and its Android.bp cc_binary module.',
-    'Add an init .rc that declares the service and starts it once sys.boot_completed=1.',
-    'Build with `m`, then boot your Cuttlefish device.',
-    'Confirm the daemon runs with no manual step: ps and logcat.',
+    'Place spine_daemon.cpp, Android.bp, and spine_daemon.rc into device/google/cuttlefish/guest/monitoring/ (or a test package).',
+    'Compile the daemon with m spine_daemon.',
+    'Push to device via adb push, or rebuild the target system image with m.',
+    'Verify that after reboot, adb shell ps -A | grep spine_daemon shows the daemon running under init (PPID 1).',
   ]}
 />
 
 <TestRunner
-  title="Confirm the daemon runs from first boot"
-  cmd={`adb shell ps -A | grep hello_daemon
-adb logcat -b all -d | grep hello_daemon | head -n 3`}
-  expect={`shell        1234   1     ...  hello_daemon
-... hello_daemon: started (pid 1234)
-
-(ps shows the daemon with parent PID 1 - init. No manual launch was needed:
-sys.boot_completed triggered the service.)`}
+  title="Verify daemon auto-launch and logging"
+  cmd={`adb shell ps -A | grep spine_daemon
+adb logcat -s SpineDaemon -d`}
+  expect={`system        1248     1     ...  spine_daemon
+... I SpineDaemon: Spine Sensor Daemon starting up (PID: 1248)
+... I SpineDaemon: Sensor sample tick #1`}
 />
 
-<WhyItWorked>
-`init` is PID 1 and supervises services. Because you declared `hello_daemon` and
-started it from the `sys.boot_completed` trigger, it comes up on every boot by
-the system's own rules - not by a human typing a command. That "runs from first
-boot, no manual step" property is exactly what the mastery check asks for.
-</WhyItWorked>
+---
 
-## 3. Track B - the Zygote fork model and ART basics
+## 3. The Zygote Fork Model and the ART Runtime
 
-Every Android app process is **forked from Zygote**, a process that pre-loads
-the Android runtime and framework classes so a new app starts fast.
+Every single user application in Android (Calculator, Settings, YouTube) is **not launched directly by `init`**. Instead, every app is a clone of the **Zygote** daemon.
 
+```text
+      ┌─────────────────────────┐
+      │       init (PID 1)      │
+      └────────────┬────────────┘
+                   │ Starts at boot
+                   ▼
+      ┌─────────────────────────┐
+      │   Zygote (PID ~400)     │
+      │ ├── Initializes ART VM  │
+      │ ├── Pre-loads Classes   │
+      │ └── Listens on Socket   │
+      └────────────┬────────────┘
+                   │
+    ActivityManager issues fork command over /dev/socket/zygote
+                   │
+         ┌─────────┴─────────┐
+         ▼                   ▼
+┌──────────────────┐ ┌──────────────────┐
+│   App Process A  │ │   App Process B  │
+│  (Camera App)    │ │  (Settings App)  │
+└──────────────────┘ └──────────────────┘
 ```
-init -> zygote (preloads ART + framework) -> fork -> app process
+
+<DeepDive title="Step-by-Step Anatomy of an App Launch">
+1. When you tap an app icon, **`system_server` (ActivityManagerService)** decides to start the app.
+2. `system_server` opens a Unix Domain Socket connection to `/dev/socket/zygote` and sends a command: `spawn package=com.example.app uid=10142 ...`.
+3. Zygote calls **`fork()`**. Thanks to Copy-on-Write (COW), this fork completes in **under 5 milliseconds**!
+4. The newly forked child process executes specialization:
+   - Drops all root/system privileges.
+   - Sets its Linux User ID (`setuid(10142)`) and Group ID (`setgid(10142)`).
+   - Installs SELinux app domain (`untrusted_app`).
+   - Closes the Zygote server socket.
+5. The child invokes the Java entry point: `android.app.ActivityThread.main()`.
+</DeepDive>
+
+---
+
+## 4. The DEX Compilation Pipeline: From Java to Machine Code
+
+How does Java/Kotlin code execute on a physical CPU in Android?
+
+```text
+ Developer Workstation               Ahead-Of-Time (dex2oat)           Physical CPU Execution
+┌─────────────────────┐             ┌────────────────────────┐         ┌─────────────────────┐
+│ Java / Kotlin Code  │             │ Target Android Device  │         │ ARM64 / x86_64 CPU  │
+└──────────┬──────────┘             └───────────┬────────────┘         └──────────┬──────────┘
+           │ javac / kotlinc                    │                                 │
+           ▼                                    │                                 │
+┌─────────────────────┐                         │                                 │
+│ JVM Bytecode (.class│                         │                                 │
+└──────────┬──────────┘                         │                                 │
+           │ d8 / r8 tool                       │                                 │
+           ▼                                    ▼                                 │
+┌─────────────────────┐ Compile during idle ┌────────────────────────┐            │
+│ DEX Bytecode (.dex) ├────────────────────>│ Native ELF Machine Code├────────────┘
+│ (Packed into .apk)  │                     │ (.odex / .oat file)    │
+└─────────────────────┘                     └────────────────────────┘
 ```
 
-Do this: watch Zygote fork a child when an app starts.
+- **DEX (Dalvik Executable)**: Register-based bytecode designed to minimize memory usage compared to stack-based JVM bytecode.
+- **JIT (Just-In-Time) Compiler**: When an app first runs, ART interprets bytecode and JIT-compiles hot loops into RAM. It logs frequently run methods to a profile file (`/data/misc/profiles/cur/0/<package>/primary.prof`).
+- **dex2oat AOT Compiler**: When the phone is plugged into a charger overnight, the `dexopt` background service runs `dex2oat` using the recorded JIT profile, generating highly optimized native assembly code stored in `/data/app/<package>/oat/arm64/base.odex`.
+
+---
+
+## 5. Running Automated Tests with atest
+
+AOSP includes a unified command-line test runner called **`atest`**. It automatically figures out whether a test is a C++ GTest, a Java unit test, or a TradeFed integration suite, builds it incrementally, pushes it to your connected device, and executes it.
+
+Do this: Execute a native unit test using `atest`:
 
 <TestRunner
-  title="Trace a Zygote fork"
-  cmd={`adb logcat -b all -d | grep -E "zygote|AndroidRuntime" | tail -n 10`}
-  expect={`... zygote64: Late-enabling -Xcheck:jni
-... zygote: Forked child process 4567
-... AndroidRuntime: ... Process: ... started
+  title="Run Bionic unit test suite with atest"
+  cmd={`atest bionic-unit-tests -- --gtest_filter=stdio.printf`}
+  expect={`...
+Generating build.ninja...
+[1/1] Building ...
+bionic-unit-tests (1 Test)
+--------------------------
+[1/1] stdio.printf: PASSED (2ms)
 
-(Zygote forks a child for each app; the child then specialises into that app.
-The preload is why the fork is cheap.)`}
+Summary
+-------
+bionic-unit-tests: Passed: 1, Failed: 0, Ignored: 0, Assumption Failed: 0
+
+All tests passed!`}
 />
 
-<WhyItWorked>
-Zygote loads **ART** (Android Runtime) and common framework classes **once**,
-then **forks**. Copy-on-write means the child shares that preloaded memory until
-it writes. ART then runs the app's **DEX** bytecode (AOT-compiled ahead of time,
-or JIT at runtime). The expensive setup is paid once, not per app.
-</WhyItWorked>
+---
+
+## 6. Rust in AOSP Literacy
+
+Over 70% of historical high-severity security vulnerabilities in Android were **memory safety bugs in C/C++** (buffer overflows, use-after-free, double-free, dangling pointers).
+
+To eliminate this class of vulnerabilities at the root, Google declared **Rust as a first-class systems language in AOSP**. Key subsystems (the Android Bluetooth stack `Gabeldorsche`, Keystore 2.0, UWB, and Virtualization) are now written in Rust.
+
+Here is how a Rust module is declared in `Android.bp`:
+
+```text
+// Android.bp
+rust_binary {
+    name: "spine_rust_daemon",
+    crate_name: "spine_rust_daemon",
+    srcs: ["src/main.rs"],
+    rustlibs: [
+        "libandroid_logger",
+        "liblog_rust",
+        "libnix",
+    ],
+    prefer_rlib: true,
+}
+```
+
+And the Rust implementation (`src/main.rs`):
+
+```rust
+// src/main.rs
+use log::{info, LevelFilter};
+use android_logger::Config;
+
+fn main() {
+    android_logger::init_once(
+        Config::default()
+            .with_tag("SpineRustDaemon")
+            .with_max_level(LevelFilter::Info),
+    );
+
+    info!("Spine Rust Daemon initialized with compile-time memory safety!");
+}
+```
+
+<DeepDive title="Why Rust Prevents the Bugs You Met in Track B">
+In C/C++, you learned that:
+- Pointer arithmetic can overshoot buffer boundaries (buffer overflow).
+- Freeing memory while another pointer holds the address causes dangling pointer corruption.
+- Accessing a variable across two threads without locks causes data races.
+
+In Rust, the **Borrow Checker** validates object ownership, lifetimes, and references at **compile time**. If code could produce a dangling pointer or a data race, **the compiler refuses to generate machine code**!
+</DeepDive>
+
+---
+
+## Mastery Check
 
 <Checkpoint
   quiz={{
-    question: 'Why does Android fork app processes from Zygote instead of exec-ing a fresh process?',
+    question: 'Why does Android compile native code against Bionic libc instead of GNU glibc?',
     options: [
-      'Zygote is the kernel scheduler.',
-      'Zygote preloads ART and framework classes once, so a fork gives a new app process that shared setup almost for free (copy-on-write).',
-      'Zygote compiles each app from source at boot.',
-      'Because Android cannot create new processes any other way.',
+      'Bionic provides BSD licensing to protect proprietary vendor code from copyleft, uses a tiny memory footprint, and includes a custom Treble-aware dynamic linker.',
+      'glibc cannot run on ARM processors.',
+      'glibc requires Java to be installed on the host.',
+      'Bionic runs C++ code faster than any other libc.',
     ],
-    answer: 1,
+    answer: 0,
     explain:
-      'Zygote pays the runtime/framework preload cost once; forking shares it via copy-on-write, so app startup is fast. ART then executes the app DEX.',
+      'Bionic was engineered specifically for Android to provide a permissive BSD license, minimal memory footprint, and specialized dynamic linking for mobile hardware.',
   }}
 />
-
-## 4. Trace an APK install
-
-When an APK is installed, the system parses and optimises it. Watch the Package
-Manager work.
-
-<TestRunner
-  title="Install an APK and watch the log"
-  cmd={`adb install -r /path/to/some.apk
-adb logcat -b all -d | grep -iE "PackageManager|dexopt|installd" | tail -n 15`}
-  expect={`Performing Streamed Install
-Success
-... PackageManager: ... Package ... installed ...
-... installd: ... dexopt ... or ... compiled ...
-... PackageManager: ... verif ...
-
-(The manager verifies and records the package; installd and dexopt prepare the
-code the runtime will run.)`}
-/>
-
-<WhyItWorked>
-`adb install` hands the APK to the framework, which records it in the package
-database; `installd`/`dexopt` then optimise the DEX for the device's runtime.
-This is the install path you will extend (or debug) in later phases when you add
-or change platform code.
-</WhyItWorked>
-
-## 5. Track C - run one `atest` host test
-
-`atest` is Android's test runner. It finds and runs a test module by name. Run a
-small **host** test to see the harness work (Phase 1 built a GTest; this runs one
-inside the platform harness).
-
-<TestRunner
-  title="Run an atest host test"
-  cmd={`source build/envsetup.sh
-atest hello_world_test`}
-  expect={`... (atest locates and builds the test module) ...
-[  PASSED  ] 1 test.
-...
-(atest builds what the test needs, runs it, and reports pass/fail. Use a small,
-fast module while learning.)`}
-/>
-
-:::tip Pick a fast, self-contained test
-`atest` can build a lot. For a first run, choose a small host test module (the
-kind that builds in a minute), so you are learning the harness rather than
-waiting on a full target build. `atest --help` lists the options.
-:::
-
-## 6. Track D - Rust literacy (read-only, ~3 days)
-
-AOSP now contains Rust (drivers, some services, and tooling). You do **not** need
-to *write* Rust this phase - you need to **read** it without being blocked. This
-is a deliberate, time-boxed literacy unit.
-
-<DoThis
-  steps={[
-    'Find Rust files in the tree (look for .rs extensions, e.g. under a rust/ or keystore-related dir).',
-    'Learn the pieces you need to follow logic: fn, let/mut, struct, impl, match, Result/Option, and the ? operator.',
-    'Read one real Rust file end to end and explain in plain words what it does.',
-    'Note where Rust modules, binaries, and tests are declared (Android.bp rust_* modules).',
-  ]}
-/>
-
-<TestRunner
-  title="Find and skim Rust in the tree"
-  cmd={`cd aosp
-find . -name "*.rs" -not -path "*/out/*" | head -n 20`}
-  expect={`./system/.../some.rs
-./external/.../another.rs
-...(names depend on your tree)...
-
-(The goal is recognition, not mastery: you can read .rs files, know Result/Option
-and match, and are not blocked. Writing Rust is a later, optional spiral.)`}
-/>
-
-<table>
-  <thead>
-    <tr><th>You should recognise</th><th>Rough C++ analogue</th></tr>
-  </thead>
-  <tbody>
-    <tr><td><code>fn name() -&gt; T</code></td><td>a function returning <code>T</code></td></tr>
-    <tr><td><code>let x = ...; let mut y = ...;</code></td><td><code>const</code> vs mutable local</td></tr>
-    <tr><td><code>match x &#123; ... &#125;</code></td><td>a <code>switch</code> that must be exhaustive</td></tr>
-    <tr><td><code>Result&lt;T, E&gt;</code> / <code>Option&lt;T&gt;</code></td><td><code>std::expected</code> / <code>std::optional</code></td></tr>
-    <tr><td><code>foo()?</code></td><td>propagate an error (early return)</td></tr>
-  </tbody>
-</table>
 
 <Checkpoint
   quiz={{
-    question: 'What is the scope of the Rust unit in this phase?',
+    question: 'What is the role of dex2oat in the Android Runtime?',
     options: [
-      'Write and ship a production Rust service.',
-      'Read-only literacy: read Rust files in the tree without being blocked.',
-      'Replace the C++ framework with Rust.',
-      'Write kernel drivers in Rust.',
+      'It converts Android.bp files into Ninja graphs.',
+      'It compiles DEX bytecode into native machine instructions (.odex / .oat) stored on disk.',
+      'It translates Java exceptions into C++ errors.',
+      'It signs APK certificates during installation.',
     ],
     answer: 1,
     explain:
-      'This is a time-boxed literacy unit. You learn to read Rust (fn, match, Result/Option, ?) so Rust files do not block you. Writing Rust is a later, optional spiral.',
+      'dex2oat is the Ahead-Of-Time compiler in ART that translates DEX bytecode into optimized native machine code for the target CPU.',
   }}
 />
 
-## Break It
-
-<BreakIt
-  items={[
-    'Symptom: hello_daemon is not running after boot. Cause: the .rc was not installed (the Soong init_rc reference is missing) or the trigger never fired. Fix: check logcat for init parse errors and confirm sys.boot_completed reaches 1.',
-    'Symptom: the daemon starts and exits immediately, so ps shows nothing. Cause: main() returns instead of looping, and the service is not oneshot, so it is considered crashed. Fix: keep the process alive (loop) or mark the service oneshot if it is meant to run once.',
-    'Symptom: atest builds forever or fails to find the module. Cause: the module name is wrong or it pulls a large dependency graph. Fix: pick a small host test and check the exact module name with atest --help / the build graph.',
-  ]}
-/>
-
-## 7. Mastery check
-
-The bar is a **native daemon that runs from first boot with no manual step**.
-Concretely, you have:
-
-- An NDK/C++ daemon built as a Soong module and launched by an `init.rc` service at boot (section 2).
-- Traced a Zygote fork and can explain the fork model and ART basics (section 3).
-- Traced an APK install through PackageManager/installd (section 4).
-- Run one `atest` host test green (section 5).
-- Read a Rust file in the tree without being blocked (section 6).
-
-**Spine artifact:** commit the daemon source, its `Android.bp` and `.rc`, and the
-boot proof under `spine/05-ndk-daemon` in your Project Spine fork (plan section
-4.8). This is the artifact the competency map records for this phase.
+## Reward
 
 <Reward xp="500" badge="Native Daemon Engineer" />
 

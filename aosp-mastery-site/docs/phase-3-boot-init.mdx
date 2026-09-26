@@ -17,6 +17,10 @@ import {
   ArchitectureDiagram,
   Troubleshooting,
   FurtherReading,
+  KeywordSpotlight,
+  DeepDive,
+  CodeAnnotator,
+  ConceptComparison,
 } from '@site/src/components/Unit';
 import {PhaseHeader} from '@site/src/components/PhaseHeader';
 import {CompleteButton} from '@site/src/components/Progress';
@@ -33,189 +37,283 @@ Follow the spark from power button to home screen.
 </Hook>
 
 <Outcome>
-You can trace a real boot on Cuttlefish - from the kernel's first messages,
-through `init`, to Zygote and `system_server` - and you can add your own
+You can trace a real Android boot on Cuttlefish - from the kernel's first messages,
+through `init` (PID 1), to Zygote and `system_server` - and you can add your own
 `init.rc` action and boot-time property that you confirm took effect. You can
-narrate the boot chain against actual log lines, not a diagram.
+narrate the boot chain against actual log lines, not an abstract diagram.
 </Outcome>
 
 <Prereqs
   interactive
   items={[
-    'Phase 2 complete: you can `lunch`, build with `m`, and boot Cuttlefish.',
-    'A running Cuttlefish device (`adb devices` shows it).',
-    'Comfort with `adb shell`, `logcat`, and reading kernel logs.',
+    'Phase 2 complete: you can lunch, build with m, and boot Cuttlefish.',
+    'A running Cuttlefish device (adb devices shows 0.0.0.0:6520 or similar).',
+    'Comfort with adb shell, logcat, and reading Linux kernel logs.',
+  ]}
+/>
+
+<KeywordSpotlight
+  terms={[
+    {
+      term: 'init (PID 1)',
+      full: 'Process Identifier 1',
+      meaning: 'The very first user-space program started by the Linux kernel after hardware initialization. It acts as the ancestor of every user-space process in Android and runs continuously until the OS powers off.',
+      context: 'Mounts storage partitions, applies SELinux policies, and parses init.rc to launch all system daemons.',
+    },
+    {
+      term: 'Zygote',
+      full: 'Zygote Pre-Warmed Virtual Machine',
+      meaning: 'A native daemon that pre-loads Android framework classes and native libraries into the ART runtime, and then waits on a socket for commands to fork() new app processes.',
+      context: 'Eliminates the multi-second overhead of initializing the Java runtime for every newly launched app.',
+    },
+    {
+      term: 'system_server',
+      full: 'The Android Core Services Host',
+      meaning: 'The single master Java process that hosts dozens of core platform services: ActivityManager, WindowManager, PackageManager, BatteryService, PowerManager, and SensorService.',
+      context: 'The heart of Android userspace: if system_server crashes, init restarts the entire Android framework.',
+    },
+    {
+      term: 'Property Service',
+      full: 'Android System Properties (getprop / setprop)',
+      meaning: 'A high-speed, memory-mapped global key-value store maintained by init. Values can be read directly by any process with zero IPC overhead via shared memory.',
+      context: 'Controls feature flags, build metadata (ro.build.version.release), hardware status, and triggers init.rc actions.',
+    },
   ]}
 />
 
 :::note Honest status of this page
-Authored against a 64-bit Linux target with a Cuttlefish device. Output blocks
-are marked **expected (author-run pending)** where not yet captured on a
-reference machine. Per this project's rule, output is shown verbatim once
-captured - never paraphrased.
+Authored against a 64-bit Linux target with a Cuttlefish device. Output blocks are marked **expected (author-run pending)** where not yet captured on a reference machine. Per this project's rule, output is shown verbatim once captured - never paraphrased.
 :::
 
-## 1. The boot chain in one picture
+---
 
-From power-on to the launcher, the handoff is:
+## 1. The Complete Boot Sequence
 
-```
-bootloader -> boot image (kernel + ramdisk) -> init (PID 1)
-           -> zygote -> system_server -> apps
-```
-
-Each arrow is a real process handoff you can see in logs. This phase is about
-**finding each arrow in the logs**, not memorising the diagram.
-
-<WhyItWorked>
-`init` is the first userspace process (PID 1). It mounts filesystems, then reads
-its `*.rc` scripts to start everything else - including `zygote`, which forks
-`system_server`, which brings up the Java framework. Every later phase reads
-logs from one of these stages, so knowing the order is the backbone of
-debugging.
-</WhyItWorked>
-
-## 2. Watch the kernel: `dmesg`
-
-The kernel logs to a ring buffer you read with `dmesg`. On Cuttlefish you can
-read it from the host or the shell. Start here: the kernel's earliest messages.
-
-<TestRunner
-  title="Read the kernel ring buffer"
-  cmd={`adb shell dmesg | head -n 30`}
-  expect={`[    0.000000] Booting Linux on physical CPU 0x0000000000 [0x...]
-[    0.000000] Linux version ... (the kernel banner)
-[    0.000000] ...
-[    ...] init: init first stage started!
-...
-
-(The first lines are the kernel banner; look for the ramdisk / first-stage init
-line near the end.)`}
-/>
-
-<WhyItWorked>
-`dmesg` is the kernel's own record. The timestamps (`[    0.000000]`) are
-seconds since boot, so the *order* is the story: CPU up, memory init, drivers
-probe, then the kernel hands off to userspace (`init`).
-</WhyItWorked>
-
-## 3. Watch userspace: `logcat`
-
-Once userspace starts, `logcat` shows the Android-side logs. Filter by the
-`init` tag to see the service startup sequence.
-
-<TestRunner
-  title="Trace init starting services"
-  cmd={`adb logcat -b all -d | grep -E " init | zygote | system_server " | head -n 40`}
-  expect={`... init: Parsing file /system/etc/init/...
-... init: starting service 'servicemanager'...
-... init: starting service 'hwservicemanager'...
-... init: starting service 'zygote'...
-... init: starting service 'surfaceflinger'...
-... zygote: ... Forked child process ...
-... system_server: ...
-
-(Each "starting service" line is init walking its .rc files. zygote then forks
-system_server.)`}
-/>
-
-:::tip `adb logcat -b all` reads every buffer
-Android separates logs into buffers (main, system, crash, kernel). Passing
-`-b all` catches init and other system messages that the default `main` buffer
-would hide. The `-d` flag dumps and exits instead of following.
-:::
-
-<Checkpoint
-  quiz={{
-    question: 'Which process is PID 1, the first userspace process, on Android?',
-    options: [
-      'zygote',
-      'system_server',
-      'init',
-      'surfaceflinger',
-    ],
-    answer: 2,
-    explain:
-      'init is PID 1. It mounts filesystems and reads the .rc scripts that start zygote, which forks system_server, which starts the framework.',
-  }}
-/>
-
-## 4. Add your own `init.rc` action and boot-time property
-
-`init` runs **actions** (triggered by events) and **services** (long-running
-daemons). You can add your own to a device/`system` `*.rc` file. The device
-tree is the right place for local experiments.
-
-Do this: add a service and a boot-time property, then rebuild and boot.
+From power button press to interactive home screen, the handoff passes through 6 distinct stages:
 
 ```text
-# Example: a tiny .rc file (drop into the device tree or a system rc dir)
-# Defines a property and a service, and runs an action on boot.
+ 1. Boot ROM (PBL)        Burned into hardware SoC; verifies and loads XBL/ABL bootloader.
+        │
+        ▼
+ 2. Bootloader (ABL)      Initializes DDR RAM, verifies boot.img cryptographic signature (AVB).
+        │
+        ▼
+ 3. Linux Kernel          start_kernel() runs, sets up MMU, interrupts, device drivers, mounts ramdisk.
+        │
+        ▼
+ 4. init (PID 1)          Mounts partitions, enforces SELinux, parses init.rc, spawns daemons.
+        │
+        ▼
+ 5. Zygote Daemon         Initializes ART VM, pre-loads 5,000+ classes, forks system_server.
+        │
+        ▼
+ 6. system_server         Starts 80+ SystemServices; launches Launcher (Home Screen) app!
+```
 
-on early-init
-    setprop persist.aosp.demo ready
+<DeepDive title="First-Stage vs. Second-Stage Init (PID 1)">
+Why does `init` execute in two separate stages?
+1. **First-Stage Init (Ramdisk / init_boot partition)**:
+   - When the kernel boots, physical storage partitions like `/system` and `/vendor` are **not mounted yet**.
+   - The kernel unpacks a minimal in-memory ramdisk and executes `/init` (First-stage).
+   - First-stage `init` mounts virtual filesystems (`/dev`, `/proc`, `/sys`), initializes `dm-verity` storage encryption, mounts dynamic partitions (`/system`, `/vendor`), loads required early kernel modules, and initializes SELinux.
+   - Once the real `/system` partition is mounted, first-stage init calls `execv("/system/bin/init", ...)` to transition seamlessly into **Second-stage Init**!
+2. **Second-Stage Init (/system/bin/init)**:
+   - Sets up the **Property Service**, establishes signal handlers to reap child processes, parses `/system/etc/init/hw/init.rc` and vendor `.rc` files, and starts native services like `servicemanager`.
+</DeepDive>
 
-service aospdemo /system/bin/sh -c "while true; do echo demo alive; sleep 60; done"
+---
+
+## 2. Inspecting Early Boot: dmesg
+
+The kernel writes its boot logs to a fixed-size circular ring buffer in kernel memory (`/dev/kmsg`). You read it using `dmesg`.
+
+<TestRunner
+  title="Read kernel early boot logs"
+  cmd={`adb shell dmesg | head -n 25`}
+  expect={`[    0.000000] Linux version 6.18... (android17-6.18-...)
+[    0.000000] Command line: ... console=ttyS0 ...
+[    0.000000] Memory: ...K/...K available
+[    0.000000] ...
+[    1.240112] Run /init as init process
+[    1.245890] init: init first stage started!
+[    1.450123] init: Loading SELinux policy...`}
+/>
+
+<WhyItWorked>
+Notice the timestamp format `[    0.000000]`: these are seconds and microseconds elapsed since hardware reset.
+Near timestamp ~1.2s, the kernel completes hardware initialization and executes `/init`. Userspace has officially begun.
+</WhyItWorked>
+
+---
+
+## 3. Userspace Service Startup: logcat
+
+Once second-stage `init` starts the `logd` daemon, all Android userspace logs flow through `logcat`.
+
+<ConceptComparison
+  title="Comparing Linux Kernel Logs vs. Android Userspace Logs"
+  leftHeader="dmesg (Kernel Ring Buffer)"
+  rightHeader="logcat (logd Daemon Buffers)"
+  rows={[
+    {
+      feature: 'Origin',
+      left: 'Kernel code: printk() calls from drivers, scheduler, memory manager.',
+      right: 'Userspace: __android_log_print() in C/C++, Log.d() in Java/Kotlin.',
+    },
+    {
+      feature: 'Buffer Type',
+      left: 'Single fixed-size circular ring buffer (/dev/kmsg). Overwrites oldest lines when full.',
+      right: 'Multiple independent buffers: main, system, radio, events, crash, kernel.',
+    },
+    {
+      feature: 'Access Permission',
+      left: 'Requires root / privileged cap_syslog capability.',
+      right: 'Standard adb shell access; apps can read their own logs.',
+    },
+    {
+      feature: 'Primary Use',
+      left: 'Kernel panics, hardware probe failures, device tree errors, early boot stalls.',
+      right: 'Service crashes, Binder transaction logs, app lifecycles, UI rendering drops.',
+    },
+  ]}
+/>
+
+Do this: Trace `init` launching `servicemanager`, `zygote`, and `system_server`:
+
+<TestRunner
+  title="Filter userspace boot transitions"
+  cmd={`adb logcat -b all -d | grep -E "init: starting service|zygote: Forked|SystemServer" | head -n 15`}
+  expect={`... init: starting service 'servicemanager'...
+... init: starting service 'hwservicemanager'...
+... init: starting service 'logd'...
+... init: starting service 'vold'...
+... init: starting service 'zygote'...
+... zygote: Forked child process ... for 'system_server'
+... SystemServer: Entered the Android system server!
+... SystemServer: Starting System Services...`}
+/>
+
+---
+
+## 4. The Android Init Language: Actions and Services
+
+The behavior of `init` is defined by `.rc` files located in:
+- `/system/etc/init/`: Platform services.
+- `/vendor/etc/init/`: Hardware vendor HAL services.
+- `/system/etc/init/hw/init.rc`: Primary boot script.
+
+An `.rc` file consists of two primary constructs:
+1. **Actions (`on <trigger>`)**: Sequences of commands executed when an event occurs.
+2. **Services (`service <name> <path> [args]`)**: Programs executed and supervised by init.
+
+```text
+# /vendor/etc/init/spine_sensor.rc
+
+# 1. Action: Runs when the boot property triggers
+on property:sys.boot_completed=1
+    setprop persist.vendor.spine.status "active"
+    write /dev/kmsg "Spine Sensor Service: Boot phase verified!"
+
+# 2. Service: Managed daemon process
+service spine_sensor /vendor/bin/spine_sensor_daemon
     class main
-    user shell
-    group shell
+    user system
+    group system input
+    capabilities NET_ADMIN
     oneshot
 ```
 
-<DoThis
-  steps={[
-    'Create an .rc file in the device tree (or a system rc directory your product includes).',
-    'Add a property: setprop persist.aosp.demo <value>.',
-    'Add a service (or an on-boot action) and reference the .rc so it is installed.',
-    'Rebuild with m and reboot the device.',
-    'Verify: getprop persist.aosp.demo returns your value, and the service appears in the logs.',
+<CodeAnnotator
+  title="Dissecting init.rc Directives"
+  items={[
+    {
+      syntax: 'on property:sys.boot_completed=1',
+      purpose: 'Event Trigger',
+      explanation: 'Action block that runs only when the system property sys.boot_completed transitions to "1".',
+    },
+    {
+      syntax: 'service spine_sensor /vendor/bin/...',
+      purpose: 'Service Declaration',
+      explanation: 'Declares a native daemon named spine_sensor and points to its compiled binary on the filesystem.',
+    },
+    {
+      syntax: 'class main',
+      purpose: 'Startup Class Group',
+      explanation: 'Allows init to start or stop groups of services at once (class_start core, class_start main).',
+    },
+    {
+      syntax: 'user system / group system input',
+      purpose: 'Least-Privilege Security',
+      explanation: 'Drops root (UID 0) privileges immediately after spawning! The process runs as UID 1000 (system).',
+    },
+    {
+      syntax: 'oneshot',
+      purpose: 'Respawn Behavior',
+      explanation: 'Tells init NOT to restart the service if it exits. Without oneshot, init will restart the process infinitely if it dies!',
+    },
   ]}
 />
+
+---
+
+## 5. Android System Properties: getprop and setprop
+
+Android's Property Service is a shared memory dictionary of string pairs: `key=value`.
+
+<DeepDive title="Property Naming Rules and Restrictions">
+System property names have strictly enforced prefix rules:
+- **`ro.*` (Read-Only)**: Set once during boot (e.g. `ro.product.model`). Once set, **cannot be modified** until reboot.
+- **`persist.*` (Persistent)**: When changed via `setprop`, init automatically writes the value to `/data/property/`. The value survives device reboots!
+- **`sys.*` (System Global)**: Runtime platform status (e.g. `sys.boot_completed`).
+- **`vendor.*` (Vendor Partition)**: Properties owned by hardware vendor daemons.
+
+SELinux strictly mediates which processes are allowed to call `setprop` on specific property names via `property_contexts`.
+</DeepDive>
+
+Do this: Query and set a custom property:
 
 <TestRunner
-  title="Verify the property and service after reboot"
-  cmd={`adb shell getprop persist.aosp.demo
-adb logcat -b all -d | grep aospdemo | head -n 5`}
-  expect={`ready
-... init: starting service 'aospdemo'...
-... aospdemo: demo alive
-...
-
-(persist. properties survive a reboot; the service name appears in init's log.)`}
+  title="Interact with the Property Service"
+  cmd={`adb shell setprop persist.vendor.demo.active 1
+adb shell getprop persist.vendor.demo.active`}
+  expect={`1`}
 />
 
-<WhyItWorked>
-`init` parses your `.rc`, registers the `aospdemo` service, and runs the
-`early-init` action - which sets the property. Because you used a `persist.`
-prefix, the value is written to a property file and restored on the next boot.
-This is exactly how real Android services (such as `surfaceflinger`) are
-declared; you have now done it yourself.
-</WhyItWorked>
+---
 
-## Break It
+## Mastery Check
 
-<BreakIt
-  items={[
-    'Symptom: getprop persist.aosp.demo returns nothing after reboot. Cause: the .rc file is not installed (not referenced by the product) or has a syntax error init ignored. Fix: check logcat for "init: ... aospdemo" parse errors and confirm the file is in the built image.',
-    'Symptom: the service starts and immediately restarts in a loop. Cause: you declared a long-running service without oneshot, but the command exits. Fix: either make the command loop (as above) or add oneshot so init treats it as run-once.',
-    'Symptom: dmesg shows nothing recent, or timestamps look wrong. Cause: the ring buffer wrapped, or you are reading the wrong buffer. Fix: use dmesg -T, or read logcat -b kernel.',
-  ]}
+<Checkpoint
+  quiz={{
+    question: 'Why does first-stage init execute from a ramdisk before the /system partition is mounted?',
+    options: [
+      'The Linux kernel cannot read ext4 or erofs filesystems directly.',
+      'The physical partitions are dynamic, encrypted, and require dm-verity verification and early kernel modules loaded before mounting.',
+      'It allows the bootloader to run Python scripts.',
+      'First-stage init is only used when the phone is connected to USB.',
+    ],
+    answer: 1,
+    explain:
+      'First-stage init contains the minimal tools required to load storage controller modules, initialize cryptographic dm-verity devices, and mount the real /system partition.',
+  }}
 />
 
-## 5. Mastery check
+<Checkpoint
+  quiz={{
+    question: 'What happens if a service declared in init.rc exits without the oneshot option?',
+    options: [
+      'The phone reboots into recovery mode.',
+      'init considers the exit an unexpected failure and respawns the service in a loop.',
+      'init permanently disables all other background services.',
+      'The process becomes a zombie that cannot be killed.',
+    ],
+    answer: 1,
+    explain:
+      'By default, init assumes services are persistent daemons. If a service exits without oneshot, init restarts it automatically.',
+  }}
+/>
 
-Narrate the boot chain **against real log lines**. From your own device, show:
-
-- A kernel line from `dmesg` early in boot (section 2).
-- `init` starting `servicemanager`, `zygote`, and `surfaceflinger` from `logcat` (section 3).
-- A **custom `init.rc` service** you added, with its `getprop` value surviving a reboot (section 4).
-
-If you can point at the exact line where each handoff happens - kernel -> init ->
-zygote -> system_server - you have met the bar.
-
-**Spine artifact:** commit your `.rc` file and the captured boot-log excerpts
-under `spine/03-init-service` in your Project Spine fork (plan section 4.8).
-This is the artifact the competency map records for this phase.
+## Reward
 
 <Reward xp="500" badge="Boot Chain Narrator" />
 

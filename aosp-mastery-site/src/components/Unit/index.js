@@ -325,3 +325,119 @@ export function FurtherReading({links = []}) {
     </div>
   );
 }
+
+/* -----------------------------------------------------------------------
+ * Educational helper components for beginner demystification.
+ * ----------------------------------------------------------------------- */
+
+/**
+ * Breaks down unfamiliar keywords, abbreviations, and acronyms with full
+ * names, plain-English definitions, and practical AOSP context.
+ */
+export function KeywordSpotlight({terms = []}) {
+  if (terms.length === 0) return null;
+  return (
+    <div className={styles.keywordSpotlight}>
+      <div className={styles.spotlightHeader}>
+        <span className={styles.spotlightIcon}>💡</span>
+        <h4 className={styles.spotlightTitle}>Keywords & Acronyms Demystified</h4>
+      </div>
+      <div className={styles.spotlightGrid}>
+        {terms.map((t, i) => (
+          <div key={i} className={styles.spotlightCard}>
+            <div className={styles.spotlightCardTop}>
+              <code className={styles.spotlightTerm}>{t.term}</code>
+              {t.full && <span className={styles.spotlightFull}>{t.full}</span>}
+            </div>
+            <p className={styles.spotlightMeaning}>{t.meaning}</p>
+            {t.context && (
+              <p className={styles.spotlightContext}>
+                <strong>Why it matters:</strong> {t.context}
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Expandable deep-dive block for complex, tricky, or under-the-hood
+ * mechanics (memory layouts, CPU registers, kernel subsystems).
+ */
+export function DeepDive({title, icon = '🔬', defaultOpen = true, children}) {
+  return (
+    <details className={styles.deepDive} open={defaultOpen}>
+      <summary className={styles.deepDiveSummary}>
+        <span className={styles.deepDiveIcon}>{icon}</span>
+        <strong>Deep Dive: {title}</strong>
+      </summary>
+      <div className={styles.deepDiveContent}>{children}</div>
+    </details>
+  );
+}
+
+/**
+ * Line-by-line syntax annotation box for demystifying tricky C++/C language
+ * keywords and macros (explicit, noexcept, container_of, volatile, etc.).
+ */
+export function CodeAnnotator({title = 'Syntax Breakdown', items = []}) {
+  if (items.length === 0) return null;
+  return (
+    <div className={styles.annotatorBox}>
+      <h5 className={styles.annotatorTitle}>
+        <span className={styles.annotatorIcon}>🔎</span> {title}
+      </h5>
+      <dl className={styles.annotatorList}>
+        {items.map((item, i) => (
+          <div key={i} className={styles.annotatorItem}>
+            <dt className={styles.annotatorTerm}>
+              <code>{item.syntax}</code>
+            </dt>
+            <dd className={styles.annotatorDesc}>
+              <strong>{item.purpose}:</strong> {item.explanation}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
+/**
+ * Side-by-side comparison table to eliminate common confusions
+ * between closely related concepts.
+ */
+export function ConceptComparison({
+  title,
+  leftHeader = 'Concept A',
+  rightHeader = 'Concept B',
+  rows = [],
+}) {
+  if (rows.length === 0) return null;
+  return (
+    <div className={styles.comparisonWrapper}>
+      {title && <h5 className={styles.comparisonTitle}>⚖️ {title}</h5>}
+      <table className={styles.comparisonTable}>
+        <thead>
+          <tr>
+            <th className={styles.compFeatureCol}>Feature / Dimension</th>
+            <th className={styles.compHeaderCol}>{leftHeader}</th>
+            <th className={styles.compHeaderCol}>{rightHeader}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={i}>
+              <td className={styles.compFeatureCell}>{r.feature}</td>
+              <td>{r.left}</td>
+              <td>{r.right}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+

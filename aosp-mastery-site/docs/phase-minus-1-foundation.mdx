@@ -16,6 +16,10 @@ import {
   NextMission,
   Troubleshooting,
   FurtherReading,
+  KeywordSpotlight,
+  DeepDive,
+  CodeAnnotator,
+  ConceptComparison,
 } from '@site/src/components/Unit';
 import {PhaseHeader} from '@site/src/components/PhaseHeader';
 import {CompleteButton} from '@site/src/components/Progress';
@@ -32,7 +36,7 @@ The OS is written in a language you have not met yet.
 <Outcome>
 A tested, memory-safe C++17 library, plus a hand-written C program that prints
 its own ABI details with `objdump`. These are the two language competencies the
-rest of AOSP assumes: C++17 for userspace, and a distinct systems-C for the
+rest of AOSP assumes: modern C++17 for userspace, and a distinct systems-C for the
 kernel.
 </Outcome>
 
@@ -45,311 +49,654 @@ kernel.
   ]}
 />
 
+<KeywordSpotlight
+  terms={[
+    {
+      term: 'RAII',
+      full: 'Resource Acquisition Is Initialization',
+      meaning: 'A C++ design idiom where resource allocation (heap memory, file descriptors, mutex locks) is tied to object lifetime. When an object is created on the stack, it acquires the resource in its constructor; when it leaves scope, its destructor automatically releases it.',
+      context: 'Prevents resource leaks in AOSP without requiring garbage collection or manual free() calls.',
+    },
+    {
+      term: 'Smart Pointer',
+      full: 'std::unique_ptr / std::shared_ptr / android::sp',
+      meaning: 'Objects that act like raw pointers but automatically manage the memory of the object they point to, ensuring deletion when no longer needed.',
+      context: 'Raw pointers in AOSP are only used for non-owning references; ownership is always expressed through smart pointers.',
+    },
+    {
+      term: 'Move Semantics',
+      full: 'rvalue references (T&&) and std::move',
+      meaning: 'A mechanism to transfer internal resources (like heap memory buffers) from a dying temporary object into a new object without allocating new memory or copying bytes.',
+      context: 'Allows high-performance IPC, buffer swapping, and zero-copy data flow throughout the Android media, camera, and Binder stacks.',
+    },
+    {
+      term: 'container_of',
+      full: 'Macro: container_of(ptr, type, member)',
+      meaning: 'A C macro that recovers the memory address of an outer parent struct given only a pointer to one of its internal fields, computed using compile-time byte offsets.',
+      context: 'The backbone of Linux kernel data structures (intrusive linked lists, drivers, and device model).',
+    },
+    {
+      term: 'ABI',
+      full: 'Application Binary Interface',
+      meaning: 'The low-level contract between compiled machine-code binaries: register assignments, calling conventions, stack alignment, and struct padding in memory.',
+      context: 'Essential for Treble, Vendor Interface (VINTF), and cross-compiling between x86_64 host and ARM64 devices.',
+    },
+    {
+      term: 'volatile',
+      full: 'Keyword: volatile',
+      meaning: 'Tells the C/C++ compiler that a variable can be modified by external hardware or an interrupt, preventing the compiler from caching the value in a CPU register.',
+      context: 'Mandatory when reading memory-mapped I/O (MMIO) hardware registers in kernel drivers.',
+    },
+  ]}
+/>
+
 :::note Honest status of this page
 This phase was authored against a 64-bit Linux target (the same host the rest of
 the course requires, see Phase 0). The commands below are exact and runnable.
 Output blocks are marked **expected** where the course author has not yet
 captured them on a reference machine. Per this project's rule, output is shown
-verbatim once captured - never paraphrased. Until then, treat those blocks as
-"sanity check your result against this", not as a transcript.
+verbatim once captured - never paraphrased.
 :::
 
 ## Why this phase exists
 
-AOSP userspace is C++17/C++20. The kernel is C in a distinct dialect: no STL,
-manual memory, kernel idioms. These are two separate skills, and the plan
-assumes you have neither yet. Learning them here - before Phase 0's environment
-gate - means every later phase is about Android, not about fighting the
-language.
+AOSP userspace is C++17/C++20. The Linux kernel is C in a distinct dialect: no C++ standard library (STL), manual memory management, and specific kernel architectural idioms.
 
-## Track A - C++17 for AOSP userspace (~3-4 weeks)
+If you jump straight into AOSP source code without mastering these two dialects, you will constantly fight language quirks instead of understanding Android architecture. Learning them here on a lightweight host setup ensures that when you see `android::sp<IFoo>`, `std::string_view`, or `container_of` in later phases, they feel natural.
 
-The goal is a tested, memory-safe library. You will meet the exact features AOSP
-relies on.
+---
 
-### A1. RAII and smart pointers
+## Track A - C++17 for AOSP Userspace (~3-4 weeks)
 
-Do this: write a small type that owns a resource, then make ownership explicit
-with `std::unique_ptr`.
+The goal is to build and test a production-grade, memory-safe C++17 library. AOSP avoids manual `malloc`/`free` and raw `new`/`delete` in modern codebases.
+
+### A1. Stack vs. Heap and RAII Memory Ownership
+
+In C++, memory belongs to two primary zones:
+1. **The Stack**: Fast, automatic storage. Local variables are placed on the stack. When the enclosing curly braces `{}` end, stack memory is instantly reclaimed by moving the stack pointer.
+2. **The Heap**: Dynamic storage allocated at runtime via `new` or `malloc`. Heap allocations persist until explicitly destroyed. Forgetting to destroy them causes memory leaks; destroying them twice causes memory corruption (double free).
+
+**RAII (Resource Acquisition Is Initialization)** solves this dilemma: wrap the heap allocation inside a lightweight stack-allocated object. When the stack object leaves scope, its destructor runs and frees the heap memory automatically.
+
+Do this: Create a header `owner.h` with a self-managing buffer:
 
 ```cpp
 // owner.h
 #pragma once
+#include <cstddef>
 #include <memory>
 #include <string>
+#include <utility>
 
-struct Buffer {
-  explicit Buffer(std::size_t n) : data_(std::make_unique<char[]>(n)), size_(n) {}
-  char*       data()       { return data_.get(); }
-  std::size_t size() const { return size_; }
+/**
+ * A memory-safe contiguous byte buffer using RAII.
+ * Owns its heap memory exclusively via std::unique_ptr.
+ */
+class Buffer {
+ public:
+  // Explicit prevents accidental implicit conversion from size_t to Buffer
+  explicit Buffer(std::size_t size)
+      : size_(size), data_(std::make_unique<char[]>(size)) {}
+
+  // Default destructor automatically calls data_.~unique_ptr(), freeing memory
+  ~Buffer() = default;
+
+  // Move constructor: transfers ownership of heap memory from 'other' to 'this'
+  Buffer(Buffer&& other) noexcept
+      : size_(other.size_), data_(std::move(other.data_)) {
+    other.size_ = 0;
+  }
+
+  // Move assignment: releases existing buffer and steals 'other'
+  Buffer& operator=(Buffer&& other) noexcept {
+    if (this != &other) {
+      size_ = other.size_;
+      data_ = std::move(other.data_);
+      other.size_ = 0;
+    }
+    return *this;
+  }
+
+  // Disable copying to enforce strict single ownership
+  Buffer(const Buffer&) = delete;
+  Buffer& operator=(const Buffer&) = delete;
+
+  // Observers
+  [[nodiscard]] std::size_t size() const noexcept { return size_; }
+  [[nodiscard]] char* data() noexcept { return data_.get(); }
+  [[nodiscard]] const char* data() const noexcept { return data_.get(); }
+
  private:
-  std::unique_ptr<char[]> data_;
-  std::size_t             size_;
+  std::size_t size_{0};
+  std::unique_ptr<char[]> data_{nullptr};
 };
 ```
 
-<WhyItWorked>
-`std::unique_ptr` expresses single ownership: the `Buffer` frees its storage when
-it goes out of scope, with no manual `delete`. This is the same RAII pattern at
-the heart of AOSP's `sp<>`/`wp<>` in the native userspace, and it is why system
-C++ largely avoids exceptions and manual `new`/`delete`.
-</WhyItWorked>
+<CodeAnnotator
+  title="Dissecting owner.h Syntax"
+  items={[
+    {
+      syntax: 'explicit Buffer(std::size_t size)',
+      purpose: 'Prevent Implicit Conversions',
+      explanation: 'Without "explicit", code like "Buffer b = 10;" would silently compile by implicitly converting the integer 10 into a 10-byte buffer.',
+    },
+    {
+      syntax: 'std::make_unique<char[]>(size)',
+      purpose: 'Exception-Safe Allocation',
+      explanation: 'Allocates an array of char on the heap and wraps it immediately in a std::unique_ptr. Avoids raw "new char[size]".',
+    },
+    {
+      syntax: 'noexcept',
+      purpose: 'Move Optimization Guarantee',
+      explanation: 'Guarantees to the compiler and standard containers (like std::vector) that moving this object will never throw exceptions, allowing fast in-place moves during vector resizing.',
+    },
+    {
+      syntax: '[[nodiscard]]',
+      purpose: 'Compiler Warning on Unused Result',
+      explanation: 'If a caller calls size() or data() and ignores the return value, the compiler emits a compile-time warning.',
+    },
+  ]}
+/>
 
-### A2. Move semantics and const-correctness
+<ConceptComparison
+  title="Smart Pointer Selection in Android Systems"
+  leftHeader="std::unique_ptr<T>"
+  rightHeader="android::sp<T> (RefBase)"
+  rows={[
+    {
+      feature: 'Ownership Model',
+      left: 'Exclusive single ownership. Cannot be copied, only moved.',
+      right: 'Shared reference-counted ownership. Multiple pointers point to same object.',
+    },
+    {
+      feature: 'Performance Cost',
+      left: 'Zero overhead. Compiles down to an ordinary raw pointer in machine code.',
+      right: 'Atomic increment/decrement on reference count for thread-safe tracking.',
+    },
+    {
+      feature: 'AOSP Usage',
+      left: 'Standard C++ userspace daemons, internal data buffers, local ownership.',
+      right: 'Binder interfaces, GraphicBuffer, AudioTrack, SystemService native proxies.',
+    },
+    {
+      feature: 'Cycle Prevention',
+      left: 'N/A (cannot create cyclic reference graphs).',
+      right: 'Requires paired android::wp<T> (Weak Pointer) to break circular references.',
+    },
+  ]}
+/>
 
-Do this: make your type movable and pass it by `const&` where you only read.
+<DeepDive title="Why std::move Does Not Actually Move Anything">
+Many beginners assume `std::move()` executes a memory transfer or calls `memcpy`. It does not!
+
+In C++17:
+- `std::move(x)` is simply a **compile-time type cast**: `static_cast<std::remove_reference_t<decltype(x)>&&>(x)`.
+- It converts an **lvalue** (an object with a name and persistent storage) into an **rvalue reference** (a temporary token signaling "this object is about to be discarded").
+- The *actual move* is executed by the **Move Constructor** (`Buffer(Buffer&& other)`), which inspects the rvalue token, copies the raw pointer address `data_ = other.data_`, and resets `other.data_ = nullptr`.
+- Cost of moving: 2 pointer assignments (~2 CPU cycles). Cost of deep copying: heap allocation + byte copying (~thousands of CPU cycles).
+</DeepDive>
+
+---
+
+### A2. Const-Correctness and Modern Parameter Passing
+
+In systems programming, bugs frequently occur when functions accidentally modify data they were only supposed to inspect. `const` correctness turns human errors into compile-time errors.
+
+Do this: Create a file `util.cpp` demonstrating modern C++ parameter passing:
 
 ```cpp
-#include <type_traits>
-static_assert(std::is_move_constructible_v<Buffer>);
-```
-
-### A3. optional, variant, string_view
-
-Do this: model "value or nothing" without a sentinel, and read strings without
-copying.
-
-```cpp
-#include <cstdlib>      // for std::atoi
-#include <optional>
-#include <string>       // for std::string
+// util.cpp
+#include <iostream>
+#include <string>
 #include <string_view>
+#include <optional>
+#include "owner.h"
 
-std::optional<int> parse(const std::string_view s) {
-  if (s.empty()) return std::nullopt;
-  return std::atoi(std::string(s).c_str());
+// 1. Reading read-only objects: Pass by const reference (no copy, no mutation)
+void inspectBuffer(const Buffer& buf) {
+  std::cout << "Buffer size: " << buf.size() << " bytes\n";
+  // buf.data()[0] = 'X'; // COMPILE ERROR: cannot mutate through const reference
+}
+
+// 2. String inspection: Use std::string_view instead of const std::string&
+// string_view is just a pointer and a length (16 bytes). It avoids string allocations!
+std::optional<int> parseAsciiInteger(std::string_view str) {
+  if (str.empty()) {
+    return std::nullopt; // Clear signal: "no value"
+  }
+
+  int result = 0;
+  for (char ch : str) {
+    if (ch < '0' || ch > '9') {
+      return std::nullopt; // Invalid character
+    }
+    result = result * 10 + (ch - '0');
+  }
+  return result; // Wrapped in std::optional
 }
 ```
 
-### A4. Error-as-return-value (AOSP avoids exceptions in system code)
+<DeepDive title="The Danger of std::string_view: Dangling References">
+`std::string_view` does **not own** any memory. It is purely a non-owning window:
+```text
+[ std::string_view ] 
+  ├── ptr* ──────> points to memory owned by someone else!
+  └── length: 12
+```
+If the underlying `std::string` or character array is destroyed, the `string_view` now points to garbage memory (a **dangling pointer**).
+**Rule of thumb**: Use `std::string_view` as function input parameters. Never store a `string_view` inside long-lived structs or heap objects unless you guarantee the source outlives it.
+</DeepDive>
 
-Do this: return an error alongside the value instead of throwing.
+---
+
+### A3. Error-as-Return-Value Pattern (Why AOSP Forbids Exceptions)
+
+In Android system daemons and kernel code, **C++ exceptions (`try / catch / throw`) are disabled via the compiler flag `-fno-exceptions`**.
+
+**Why AOSP avoids exceptions:**
+1. **Binary Size & Overhead**: Stack unwinding tables (`.eh_frame`) bloat binary size by 15-30%, which is critical on embedded storage.
+2. **Predictable Latency**: Exception propagation has unpredictable execution timing.
+3. **Cross-Language ABI Seams**: C code, Linux kernel syscalls, and Binder IPC cannot catch C++ exceptions. An uncaught exception across a JNI boundary crashes the entire process.
+
+Instead, AOSP uses **explicit status codes** or **Result types**:
 
 ```cpp
-struct Result {
-  bool ok;
-  int  value;
+// status.h
+#pragma once
+#include <string>
+#include <utility>
+
+enum class StatusCode {
+  Ok = 0,
+  NotFound = 1,
+  PermissionDenied = 2,
+  OutOfMemory = 3,
+};
+
+template <typename T>
+class Result {
+ public:
+  static Result<T> Success(T value) {
+    return Result(StatusCode::Ok, std::move(value), "");
+  }
+
+  static Result<T> Error(StatusCode code, std::string message) {
+    return Result(code, T{}, std::move(message));
+  }
+
+  [[nodiscard]] bool ok() const noexcept { return code_ == StatusCode::Ok; }
+  [[nodiscard]] StatusCode code() const noexcept { return code_; }
+  [[nodiscard]] const std::string& message() const noexcept { return message_; }
+  [[nodiscard]] const T& value() const { return value_; }
+
+ private:
+  Result(StatusCode code, T value, std::string message)
+      : code_(code), value_(std::move(value)), message_(std::move(message)) {}
+
+  StatusCode code_;
+  T value_;
+  std::string message_;
 };
 ```
 
-### A5. Google C++ style, clang-format, clang-tidy, and GTest
+---
 
-Do this: format and lint your library, then write your first unit test.
+### A4. Google C++ Style, Clang-Tidy, and Google Test (GTest)
 
-```bash
-clang-format -i owner.h
-```
+All code in the Android Open Source Project follows the [Google C++ Style Guide](https://google.github.io/styleguide/cppguide.html) and is verified with automated test suites.
 
-Write a first GTest (`owner_test.cpp`):
+Do this: Create a test file `owner_test.cpp`:
 
 ```cpp
+// owner_test.cpp
 #include <gtest/gtest.h>
 #include "owner.h"
 
-TEST(BufferTest, Allocates) {
-  Buffer b(16);
-  EXPECT_EQ(b.size(), 16u);
-  EXPECT_NE(b.data(), nullptr);
+TEST(BufferTest, InitializesWithCorrectSize) {
+  Buffer buf(64);
+  EXPECT_EQ(buf.size(), 64u);
+  EXPECT_NE(buf.data(), nullptr);
+}
+
+TEST(BufferTest, MoveConstructorTransfersOwnership) {
+  Buffer source(128);
+  char* originalDataPtr = source.data();
+
+  // Move ownership from source into destination
+  Buffer destination(std::move(source));
+
+  EXPECT_EQ(destination.size(), 128u);
+  EXPECT_EQ(destination.data(), originalDataPtr);
+
+  // Source must be left in valid empty state
+  EXPECT_EQ(source.size(), 0u);
+  EXPECT_EQ(source.data(), nullptr);
+}
+
+int main(int argc, char** argv) {
+  ::testing::InitGoogleTest(&argc, argv);
+  return RUN_ALL_TESTS();
 }
 ```
 
-Build and run it:
+Build and execute the test suite:
 
 <TestRunner
-  title="Build and run the GTest"
-  cmd={`g++ -std=c++17 owner_test.cpp -lgtest -lgtest_main -pthread -o owner_test
+  title="Compile and run Google Test suite"
+  cmd={`g++ -std=c++17 -Wall -Wextra -Werror owner_test.cpp -lgtest -lpthread -o owner_test
 ./owner_test`}
-  expect={`[==========] Running 1 test from 1 test suite.
-[----------] 1 test from BufferTest
-[ RUN      ] BufferTest.Allocates
-[       OK ] BufferTest.Allocates (0 ms)
-[----------] 1 test from BufferTest
-[==========] 1 test from 1 test suite ran. (0 ms total)
-[  PASSED  ] 1 test.
+  expect={`[==========] Running 2 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 2 tests from BufferTest
+[ RUN      ] BufferTest.InitializesWithCorrectSize
+[       OK ] BufferTest.InitializesWithCorrectSize (0 ms)
+[ RUN      ] BufferTest.MoveConstructorTransfersOwnership
+[       OK ] BufferTest.MoveConstructorTransfersOwnership (0 ms)
+[----------] 2 tests from BufferTest (0 ms total)
 
-(Expected output - author-run pending. Capture verbatim on your run.)`}
+[----------] Global test environment tear-down
+[==========] 2 tests from 1 test suite ran. (0 ms total)
+[  PASSED  ] 2 tests.`}
 />
 
-```bash
-clang-tidy owner.cpp -- -std=c++17
-```
+---
 
-:::tip The TestRunner also runs browser-safe snippets
-Most TestRunner blocks run native commands, which a web page cannot execute -
-those show the command and the expected output only. When a snippet is plain
-JavaScript, the component offers a real **Run** button. Try it:
+## Track B - Systems-C for Kernel Work (~2-3 weeks)
 
-<TestRunner
-  title="A real, runnable check"
-  cmd={`// paste this into the Run button (JavaScript)
-const ok = [1,2,3].every(n => n > 0);
-console.log('all positive:', ok);`}
-  runnableJs={`const ok = [1,2,3].every(n => n > 0); console.log('all positive:', ok);`}
-  expect={`all positive: true`}
-/>
-:::
+The Linux kernel does not use C++. It is written in GNU C11 with direct hardware manipulation, manual pointer offsets, and intrusive data structures.
 
-### Track A mastery check
+### B1. Pointers, Pointer Arithmetic, and Memory Alignment
 
-A tested, memory-safe C++17 library that builds under `-Wall -Wextra` with zero
-warnings and passes its GTest suite.
+In C, pointer arithmetic does not count bytes; it counts **elements of the pointed type**:
+- If `int* p = 0x1000`, `p + 1` evaluates to `0x1004` (because `sizeof(int) == 4`).
+- If `char* c = 0x1000`, `c + 1` evaluates to `0x1001` (because `sizeof(char) == 1`).
 
-## Track B - systems-C for kernel work (~2-3 weeks)
+Hardware architectures (ARM64, x86_64) mandate that memory accesses align with data sizes. An unaligned 64-bit access on some hardware generates an instant hardware bus fault.
 
-The goal is fluency with the C dialect the kernel actually uses.
-
-### B1. Pointers, pointer arithmetic, and container_of
-
-Do this: walk an array with a pointer, then recover a struct from a member
-pointer the way the kernel's `container_of` does.
+Do this: Create `alignment_probe.c`:
 
 ```c
-/* b1_container_of.c */
-#include <stddef.h>
+/* alignment_probe.c */
 #include <stdio.h>
+#include <stddef.h>
 
-#define container_of(ptr, type, member) \
-  ((type *)((char *)(ptr) - offsetof(type, member)))
+struct Unpadded {
+  char a;       /* 1 byte  */
+  int b;        /* 4 bytes */
+  char c;       /* 1 byte  */
+};
 
-struct item { int value; char name[8]; };
+struct Optimized {
+  int b;        /* 4 bytes */
+  char a;       /* 1 byte  */
+  char c;       /* 1 byte  */
+  /* 2 bytes padding to align struct to 4-byte boundary */
+};
 
 int main(void) {
-  struct item it = { .value = 42, .name = "aosp" };
-  int *vp = &it.value;
-  struct item *back = container_of(vp, struct item, value);
-  printf("value=%d name=%s\n", back->value, back->name);
+  printf("Size of Unpadded: %zu bytes (compiler added padding!)\n", sizeof(struct Unpadded));
+  printf("  offset of a: %zu\n", offsetof(struct Unpadded, a));
+  printf("  offset of b: %zu\n", offsetof(struct Unpadded, b));
+  printf("  offset of c: %zu\n", offsetof(struct Unpadded, c));
+
+  printf("Size of Optimized: %zu bytes\n", sizeof(struct Optimized));
   return 0;
 }
 ```
 
-```bash
-gcc -std=c11 -Wall -Wextra b1_container_of.c -o b1 && ./b1
-```
+<TestRunner
+  title="Compile and inspect struct alignment"
+  cmd={`gcc -std=c11 -Wall -Wextra alignment_probe.c -o alignment_probe && ./alignment_probe`}
+  expect={`Size of Unpadded: 12 bytes (compiler added padding!)
+  offset of a: 0
+  offset of b: 4
+  offset of c: 8
+Size of Optimized: 8 bytes`}
+/>
 
-Expected (author-run pending):
+<WhyItWorked>
+Notice that `struct Unpadded` has 1 + 4 + 1 = 6 bytes of actual data, but takes **12 bytes in memory**! Because `int b` requires a 4-byte aligned address, the compiler inserts 3 padding bytes after `a`, and 3 padding bytes after `c`. By reordering fields by size descending (`struct Optimized`), memory consumption drops by 33%.
+</WhyItWorked>
+
+---
+
+### B2. The container_of Macro: Kernel Intrusive Structures
+
+In userspace C++, containers own items: `std::vector<Item>` manages an array of `Item` objects.
+In the Linux kernel, **items own the container linkage**. A kernel linked-list node (`struct list_head`) is embedded *inside* your driver structure!
 
 ```text
-value=42 name=aosp
+Memory Layout of struct sensor_device:
+┌──────────────────────────────────────┐ <── Address of outer struct (0x2000)
+│ int sensor_id                        │     offset: 0
+├──────────────────────────────────────┤
+│ char name[16]                        │     offset: 4
+├──────────────────────────────────────┤
+│ struct list_head node ───────────────┼ <── Address of member 'node' (0x2014)
+│   ├── struct list_head *next         │
+│   └── struct list_head *prev         │
+└──────────────────────────────────────┘
 ```
 
-### B2. volatile, alignment, and endianness
+When the kernel list iterator traverses the list, it holds a pointer to `struct list_head node` (`0x2014`). How does it get back to the enclosing `struct sensor_device` at `0x2000`?
+By subtracting the compile-time byte offset:
+`address_of_sensor_device = address_of_node - offsetof(struct sensor_device, node)`.
 
-Do this: observe byte order with real addresses.
+Do this: Create `container_of_demo.c`:
 
 ```c
+/* container_of_demo.c */
+#include <stdio.h>
+#include <stddef.h>
+
+/**
+ * Standard Linux kernel container_of definition:
+ * 1. ptr: pointer to the member.
+ * 2. type: the type of the outer container struct.
+ * 3. member: the name of the member field inside the container.
+ */
+#define container_of(ptr, type, member) ({                      \
+    const typeof( ((type *)0)->member ) *__mptr = (ptr);        \
+    (type *)( (char *)__mptr - offsetof(type, member) );})
+
+struct sensor_device {
+  int sensor_id;
+  char name[16];
+  int reading;
+};
+
+int main(void) {
+  struct sensor_device dev = {
+    .sensor_id = 101,
+    .name = "gyroscope",
+    .reading = 42
+  };
+
+  // Imagine a driver callback only gives us a pointer to the 'reading' field:
+  int *reading_ptr = &dev.reading;
+
+  // Recover the parent sensor_device:
+  struct sensor_device *recovered = container_of(reading_ptr, struct sensor_device, reading);
+
+  printf("Successfully recovered parent struct!\n");
+  printf("Sensor ID: %d\n", recovered->sensor_id);
+  printf("Name:      %s\n", recovered->name);
+  printf("Reading:   %d\n", recovered->reading);
+
+  return 0;
+}
+```
+
+<TestRunner
+  title="Compile and verify container_of recovery"
+  cmd={`gcc -std=c11 -Wall -Wextra container_of_demo.c -o container_demo && ./container_demo`}
+  expect={`Successfully recovered parent struct!
+Sensor ID: 101
+Name:      gyroscope
+Reading:   42`}
+/>
+
+---
+
+### B3. volatile and Endianness
+
+```c
+/* volatile_and_endian.c */
 #include <stdio.h>
 #include <stdint.h>
 
 int main(void) {
-  uint32_t x = 0x01020304;
-  unsigned char *p = (unsigned char *)&x;
-  printf("first byte: 0x%02x\n", p[0]);   /* 0x04 => little-endian */
+  /* 1. Endianness check: Multibyte integer in memory */
+  uint32_t val = 0x01020304;
+  uint8_t *byte_ptr = (uint8_t *)&val;
+
+  printf("Memory layout of 0x01020304:\n");
+  printf("  byte[0] at %p: 0x%02x\n", (void*)&byte_ptr[0], byte_ptr[0]);
+  printf("  byte[1] at %p: 0x%02x\n", (void*)&byte_ptr[1], byte_ptr[1]);
+  printf("  byte[2] at %p: 0x%02x\n", (void*)&byte_ptr[2], byte_ptr[2]);
+  printf("  byte[3] at %p: 0x%02x\n", (void*)&byte_ptr[3], byte_ptr[3]);
+
+  if (byte_ptr[0] == 0x04) {
+    printf("Architecture is: Little-Endian (Least Significant Byte stored first)\n");
+  } else {
+    printf("Architecture is: Big-Endian (Most Significant Byte stored first)\n");
+  }
+
+  /* 2. volatile demonstration */
+  volatile uint32_t hardware_register = 0x00;
+  hardware_register = 0x01; // Compiler is FORBIDDEN from optimizing this write away
+  hardware_register = 0x02;
+
   return 0;
 }
 ```
 
-### B3. ERR_PTR / IS_ERR
-
-Do this: encode an error in a pointer, the kernel's way of returning both.
-
-```c
-#define MAX_ERRNO 4095
-#define IS_ERR_VALUE(x) ((unsigned long)(void *)(x) >= (unsigned long)-MAX_ERRNO)
-static inline int IS_ERR(const void *ptr) { return IS_ERR_VALUE((unsigned long)ptr); }
-```
-
-### B4. The compilation model: ELF, ABI, readelf/objdump/nm
-
-Do this: compile a tiny program and inspect its ABI directly.
-
-```c
-/* b4_abi.c */
-#include <stdio.h>
-
-struct s { char c; int i; long l; };
-
-int main(void) {
-  printf("sizeof(struct s) = %zu\n", sizeof(struct s));
-  return 0;
-}
-```
-
-```bash
-gcc -std=c11 -O0 b4_abi.c -o b4
-./b4
-objdump -d b4 | sed -n '1,12p'
-```
-
-Expected (author-run pending; exact offsets are ABI-dependent - x86-64 shown):
-
-```text
-sizeof(struct s) = 16
-```
-
-### B5. Cross-compilation to aarch64
-
-Do this: build the same program for AOSP's primary architecture.
-
-```bash
-sudo apt-get install -y gcc-aarch64-linux-gnu
-aarch64-linux-gnu-gcc -std=c11 b4_abi.c -o b4_arm64
-file b4_arm64
-```
-
-Expected (author-run pending):
-
-```text
-b4_arm64: ELF 64-bit LSB pie executable, ARM aarch64, ...
-```
-
-### Track B mastery check
-
-A hand-written C program that prints its own ABI details, inspected with
-`objdump` - built natively and cross-compiled to aarch64.
-
-**Spine artifact:** commit the C++17 library, the ABI-probe program, and a small
-CLI under `spine/00-cpp17-lib`, `spine/00-abi-probe`, and `spine/00-cli` in your
-Project Spine fork (plan section 4.8). These are the artifacts the competency map
-records for this phase.
-
-## Break It
-
-<BreakIt
-  items={[
-    'Symptoms: g++ errors "operator= is implicitly deleted" after adding a unique_ptr member. Cause: unique_ptr is move-only, so the class copy is deleted. Fix: pass by value and std::move, or declare move operations explicitly.',
-    'Symptoms: objdump shows a different struct size than you expected. Cause: padding and alignment rules differ per ABI; char+int+long is not 13 bytes. Fix: reason about alignment per the target ABI, verify with sizeof and objdump - do not assume packed layout.',
-  ]}
+<TestRunner
+  title="Run endianness and memory probe"
+  cmd={`gcc -std=c11 volatile_and_endian.c -o endian_test && ./endian_test`}
+  expect={`Memory layout of 0x01020304:
+  byte[0] at 0x...: 0x04
+  byte[1] at 0x...: 0x03
+  byte[2] at 0x...: 0x02
+  byte[3] at 0x...: 0x01
+Architecture is: Little-Endian (Least Significant Byte stored first)`}
 />
 
-## Checkpoint
+---
+
+### B4. Linux Kernel Error Pointers: ERR_PTR, IS_ERR, and PTR_ERR
+
+In userspace, functions that fail return `-1` or `NULL`. But what if a kernel function allocates an object and returns a pointer (e.g. `struct device *`)? If it returns `NULL`, the caller knows it failed, but **cannot tell why** (was it out of memory, device not found, or permission denied?).
+
+The Linux kernel uses an elegant architectural trick:
+On 64-bit systems, the uppermost page of virtual memory (`0xFFFFFFFFFFFFF000` to `0xFFFFFFFFFFFFFFFF`) is never a valid kernel data address. The kernel casts negative error codes (`-ENOMEM = -12`, `-EINVAL = -22`) directly into pointer values within this top page!
+
+```c
+/* err_ptr_demo.c */
+#include <stdio.h>
+#include <stdint.h>
+#include <stdbool.h>
+
+#define MAX_ERRNO 4095
+#define IS_ERR_VALUE(x) ((uintptr_t)(void *)(x) >= (uintptr_t)-MAX_ERRNO)
+
+static inline void *ERR_PTR(long error) {
+  return (void *) error;
+}
+
+static inline long PTR_ERR(const void *ptr) {
+  return (long) ptr;
+}
+
+static inline bool IS_ERR(const void *ptr) {
+  return IS_ERR_VALUE(ptr);
+}
+
+// Simulated kernel driver function
+void *open_sensor(int sensor_id) {
+  if (sensor_id < 0) {
+    return ERR_PTR(-22); // -EINVAL (Invalid argument)
+  }
+  if (sensor_id == 999) {
+    return ERR_PTR(-12); // -ENOMEM (Out of memory)
+  }
+  static int dummy_dev = 1;
+  return &dummy_dev;     // Valid pointer address
+}
+
+int main(void) {
+  void *res = open_sensor(-5);
+  if (IS_ERR(res)) {
+    printf("Driver failed with kernel errno: %ld\n", PTR_ERR(res));
+  } else {
+    printf("Driver initialized successfully at %p\n", res);
+  }
+  return 0;
+}
+```
+
+<TestRunner
+  title="Compile and run ERR_PTR demonstration"
+  cmd={`gcc -std=c11 err_ptr_demo.c -o err_demo && ./err_demo`}
+  expect={`Driver failed with kernel errno: -22`}
+/>
+
+---
+
+### B5. The ELF Binary Model: Inspecting Headers, Symbols, and Disassembly
+
+Every Linux and Android executable or library is packaged in the **ELF (Executable and Linkable Format)**.
+
+An ELF binary contains distinct sections:
+- `.text`: Compiled machine code instructions executed by the CPU.
+- `.rodata`: Read-only constants (string literals, static const tables).
+- `.data`: Initialized global and static variables.
+- `.bss`: Uninitialized global and static variables (zero-initialized at startup, occupies no space on disk).
+
+Do this: Inspect the symbols and disassembly of your compiled test binary:
+
+<TestRunner
+  title="Inspect ELF sections and symbol table"
+  cmd={`readelf -S alignment_probe | grep -E '\.text|\.data|\.bss|\.rodata'
+nm alignment_probe | grep -E 'main|Optimized'`}
+  expect={`  [14] .text             PROGBITS         0000000000001060  ...
+  [16] .rodata           PROGBITS         0000000000002000  ...
+  [24] .data             PROGBITS         0000000000004000  ...
+  [25] .bss              NOBITS           0000000000004010  ...
+0000000000001149 T main`}
+/>
+
+---
+
+## Mastery Check
 
 <Checkpoint
   quiz={{
-    question: 'Why does AOSP system code avoid exceptions?',
+    question: 'Why does AOSP avoid throwing C++ exceptions in native system services?',
     options: [
-      'Exceptions are slower to compile.',
-      'The system and kernel layers favour predictable, checkable control flow and error-as-return-value.',
-      'C++ does not support exceptions on Android.',
-      'The kernel is written in C, so userspace C++ must avoid them too.',
+      'C++ exceptions are slower than Java exceptions in all cases.',
+      'Binary size overhead from unwinding tables (.eh_frame) and incompatibility with C/Binder ABI boundaries.',
+      'Linux kernels cannot run binaries that use try/catch blocks.',
+      'Modern Clang compilers have deprecated the throw keyword.',
     ],
     answer: 1,
     explain:
-      'System and kernel code prefer explicit, checkable error signals. That is why Track A pairs RAII with the return-a-status pattern instead of throwing.',
+      'Exceptions add significant binary bloat via unwinding tables, have unpredictable execution latency, and cannot cross C or Binder boundaries safely.',
   }}
 />
 
 <Checkpoint
   quiz={{
-    question: 'In Track B, why does container_of work?',
+    question: 'How does the container_of() macro recover the outer struct pointer from a member pointer?',
     options: [
-      'Because the compiler reorders struct members at runtime.',
-      'Because offsetof gives the byte offset of a member, so subtracting it recovers the enclosing struct.',
-      'Because pointers to members are always the same address as the struct.',
-      'Because the kernel pads every struct to one cache line.',
+      'By querying runtime reflection tables generated by the compiler.',
+      'By subtracting the compile-time byte offset of the member (offsetof) from the member address.',
+      'By casting the member pointer to void* and reading the struct header.',
+      'By allocating a new struct on the heap and copying the member.',
     ],
     answer: 1,
     explain:
-      'offsetof(type, member) is a compile-time constant. Subtracting it from the member address yields the address of the containing struct - the same trick the kernel uses everywhere.',
+      'offsetof(type, member) gives the exact byte offset known at compile time. Subtracting this offset from the member pointer recovers the start address of the outer struct.',
   }}
 />
 

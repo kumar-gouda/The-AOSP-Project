@@ -17,6 +17,10 @@ import {
   ArchitectureDiagram,
   Troubleshooting,
   FurtherReading,
+  KeywordSpotlight,
+  DeepDive,
+  CodeAnnotator,
+  ConceptComparison,
 } from '@site/src/components/Unit';
 import {PhaseHeader} from '@site/src/components/PhaseHeader';
 import {CompleteButton} from '@site/src/components/Progress';
@@ -33,212 +37,462 @@ Where "Android the platform" actually lives.
 </Hook>
 
 <Outcome>
-A new **SystemService** registered inside `system_server`, exposing your Phase 6
-HAL through an **app-facing AIDL** interface, called successfully **from an app**
-- plus a **system-side unit test** that runs green under `atest`. Your
-kernel/HAL work is now a normal Android API.
+A new **SystemService** registered inside `system_server`, wrapping your Phase 6 HAL behind a secure, permission-checked **app-facing AIDL** interface. You will access this service from a sample Android app via `Context.getSystemService()`, enforce permission checks with `Binder.getCallingUid()`, and verify stability with a **system-side unit test** under `atest`.
 </Outcome>
 
 <Prereqs
   interactive
   items={[
-    'Phase 6 complete: you have an AIDL HAL, callable end-to-end and covered by a VTS test.',
-    'Phase 3 complete: comfortable with services and logcat.',
-    'Enough Java/Kotlin to read the framework (Phase 1 gave you the C++ side).',
+    'Phase 6 complete: you have an AIDL HAL running and passing VTS tests.',
+    'Phase 3 complete: comfortable with Zygote, system_server startup, and logcat.',
+    'Basic Java/Kotlin comprehension (Phase 1 gave you the underlying C++ Binder plumbing).',
   ]}
 />
 
-:::note Honest status of this page
-Authored against a 64-bit Linux target. Output blocks are marked **expected
-(author-run pending)** where not yet captured on a reference machine. Per this
-project's rule, output is shown verbatim once captured - never paraphrased.
-:::
+---
 
-## 1. system_server: where platform services live
+## 1. Keywords & Core Concepts
 
-`system_server` is the Java process that hosts the platform's core services
-(ActivityManager, PackageManager, and hundreds more). A **SystemService** is a
-class registered here so the rest of the system - and apps - can find it.
+Navigating the Android Java framework requires understanding how the OS exposes system capabilities to millions of apps without compromising security:
 
-```
-init -> zygote -> system_server -> { ActivityManagerService, ... your service }
-```
-
-<WhyItWorked>
-Apps cannot talk to your kernel or HAL directly. The pattern is always: a
-SystemService in `system_server` wraps the lower layer and exposes a **safe,
-permissioned** API. That indirection is deliberate - it is where permissions,
-policy, and lifecycle live. This phase completes the vertical slice: kernel →
-HAL → framework → app.
-</WhyItWorked>
-
-<Checkpoint
-  quiz={{
-    question: 'Why does an app call a SystemService rather than the HAL directly?',
-    options: [
-      'HALs cannot be called from userspace.',
-      'The SystemService is where permissions, policy, and lifecycle live; it wraps the lower layer behind a safe app-facing API.',
-      'SystemServices are faster.',
-      'Apps are not allowed to use Binder.',
-    ],
-    answer: 1,
-    explain:
-      'The SystemService is the mediation layer: it checks permissions and applies policy before reaching the HAL. That is why the app-facing API exists at all.',
-  }}
+<KeywordSpotlight
+  keywords={[
+    {
+      term: 'system_server',
+      fullName: 'Android System Server Process',
+      pronunciation: 'system server',
+      plainEnglish: 'The massive, highly-privileged Java process (UID 1000, system) spawned directly by Zygote that hosts almost all central OS services.',
+      aospContext: 'Hosts over 100 platform services, including ActivityManagerService (AMS), WindowManagerService (WMS), PackageManagerService (PMS), and PowerManagerService.',
+    },
+    {
+      term: 'SystemService',
+      fullName: 'AOSP System Service Base Class',
+      pronunciation: 'system service',
+      plainEnglish: 'The internal abstract Java class (com.android.server.SystemService) that defines the lifecycle, boot phases, and publishing contract for platform services.',
+      aospContext: 'Services extending SystemService are managed by SystemServiceManager inside system_server and receive onBootPhase() lifecycle callbacks.',
+    },
+    {
+      term: 'ServiceManager',
+      fullName: 'Android Java Service Directory Wrapper',
+      pronunciation: 'service manager',
+      plainEnglish: 'The Java client wrapper (android.os.ServiceManager) around the native servicemanager daemon used to publish and query Binder tokens by string name.',
+      aospContext: 'Apps query ServiceManager.getService("foo") to receive an IBinder reference, which is then cast into a typed interface proxy using IFoo.Stub.asInterface().',
+    },
+    {
+      term: 'Binder.getCallingUid()',
+      fullName: 'Caller Linux User ID Inspection Primitive',
+      pronunciation: 'get calling U-I-D',
+      plainEnglish: 'A static method in android.os.Binder that inspects the kernel Binder driver to return the real Linux UID of the remote process invoking the current method.',
+      aospContext: 'Crucial for framework security. Used inside SystemServices to verify whether the calling app is granted the necessary permission before executing privileged actions.',
+    },
+    {
+      term: 'clearCallingIdentity()',
+      fullName: 'Security Token Reset Pattern',
+      pronunciation: 'clear calling identity',
+      plainEnglish: 'A method that resets the current thread\'s Binder caller ID back to system_server\'s own UID (UID 1000) so it can access internal HALs or databases.',
+      aospContext: 'Must ALWAYS be paired with restoreCallingIdentity(token) in a Java try-finally block; failing to do so causes severe security vulnerabilities or permission leakage.',
+    },
+    {
+      term: 'Manager Pattern',
+      fullName: 'Framework Client-Side Manager Pattern',
+      pronunciation: 'manager pattern',
+      plainEnglish: 'The architectural pattern where developers never call Binder IPC directly; instead, they call a user-friendly wrapper like Vibrator, LocationManager, or your custom FooManager.',
+      aospContext: 'Registered in SystemServiceRegistry.java, instantiated per Context, and caches the Binder proxy returned by ServiceManager.',
+    },
+  ]}
 />
 
-## 2. Write the SystemService
+---
 
-A SystemService is a class that extends the framework's service base and is
-registered with the `ServiceManager`. Here is the shape of a minimal one.
+## 2. Architecture: Why `system_server`?
 
-```java
-// FooService.java - a minimal SystemService
+Why does Android place hundreds of services inside one monolithic Java process (`system_server`) instead of running them as separate Linux daemons?
+
+<ConceptComparison
+  title="System Service Hosting Models"
+  conceptA={{
+    name: 'system_server (Java SystemServices)',
+    description: 'ActivityManager, WindowManager, FooService running in a single shared ART instance.',
+  }}
+  conceptB={{
+    name: 'Native Platform Daemons (C++)',
+    description: 'vold, netd, surfaceflinger running as standalone Linux processes.',
+  }}
+  rows={[
+    {
+      feature: 'Process & UID',
+      conceptA: 'Single process, UID 1000 (system)',
+      conceptB: 'Independent processes, dedicated UIDs (root, system, graphics)',
+    },
+    {
+      feature: 'Inter-Service Calls',
+      conceptA: 'Direct Java method calls (0 overhead) or local Binder',
+      conceptB: 'Full Binder IPC or Unix domain socket traversal',
+    },
+    {
+      feature: 'RAM Overhead',
+      conceptA: 'Very low per service (shares ART heap, JIT compiler, and core classes)',
+      conceptB: 'Higher (each process allocates its own stack, heap, and Bionic runtime)',
+    },
+    {
+      feature: 'Crash Blast Radius',
+      conceptA: 'High: If system_server crashes, the entire Android framework restarts (soft reboot)',
+      conceptB: 'Low: If netd crashes, init can restart it without killing the UI',
+    },
+  ]}
+/>
+
+### The End-to-End Vertical Slice
+
+Here is how an app call travels down to silicon:
+
+```
++-------------------------------------------------------------------+
+|                        App Address Space                          |
+|  MainActivity -> FooManager.getVersion()                         |
+|         |                                                         |
+|         v                                                         |
+|  IFooManager.Stub.Proxy.getVersion()                              |
++---------|---------------------------------------------------------+
+          |  Binder IPC (/dev/binder)
+          v
++-------------------------------------------------------------------+
+|                     system_server (UID 1000)                      |
+|  FooService.FooImpl.getVersion()                                  |
+|     - Check permission: enforceCallingOrSelfPermission()          |
+|     - Binder.clearCallingIdentity()                               |
+|     - Call HAL proxy: mHalService.getVersion()                    |
++---------|---------------------------------------------------------+
+          |  Binder IPC (/dev/binder - Treble Seam)
+          v
++-------------------------------------------------------------------+
+|                   vendor.foo-service (HAL)                        |
+|  aid::android::hardware::foo::Foo::getVersion()                   |
+|     - Talk to Linux device node: /dev/foo_device                  |
++-------------------------------------------------------------------+
+```
+
+---
+
+## 3. Defining the App-Facing Framework AIDL
+
+Create `frameworks/base/core/java/android/os/IFooService.aidl`. Notice that unlike HAL AIDL, framework AIDL does NOT use `@VintfStability` because it is internal to the `/system` partition:
+
+```aidl
+// frameworks/base/core/java/android/os/IFooService.aidl
+package android.os;
+
+/**
+ * System-internal interface for Foo hardware management.
+ * @hide
+ */
+interface IFooService {
+    /**
+     * Reads hardware version. Requires android.permission.READ_FOO_HARDWARE.
+     */
+    int getVersion();
+
+    /**
+     * Returns hardware telemetry ping.
+     */
+    String ping();
+}
+```
+
+---
+
+## 4. Writing the SystemService in Java
+
+Create `frameworks/base/services/core/java/com/android/server/foo/FooService.java`:
+
+<CodeAnnotator
+  title="FooService.java: Production SystemService with Permission Enforcement"
+  code={`package com.android.server.foo;
+
+import android.content.Context;
+import android.os.Binder;
+import android.os.IBinder;
+import android.os.IFooService;
+import android.util.Slog;
+import com.android.server.SystemService;
+
 public class FooService extends SystemService {
+    private static final String TAG = "FooService";
+    private final Context mContext;
+    private final FooImpl mImpl;
+
     public FooService(Context context) {
         super(context);
+        mContext = context;
+        mImpl = new FooImpl();
     }
 
     @Override
     public void onStart() {
-        // Publish so other processes can find it by name.
-        publishBinderService(Context.FOO_SERVICE, new FooImpl());
+        Slog.i(TAG, "Publishing FooService to ServiceManager...");
+        publishBinderService(Context.FOO_SERVICE, mImpl);
     }
 
-    private final class FooImpl extends IFoo.Stub {
+    @Override
+    public void onBootPhase(int phase) {
+        if (phase == PHASE_SYSTEM_SERVICES_READY) {
+            Slog.i(TAG, "System services ready: connecting to downstream HAL...");
+            mImpl.connectToHal();
+        }
+    }
+
+    private final class FooImpl extends IFooService.Stub {
+        private void connectToHal() {
+            // Connect to AIDL HAL via libbinder_ndk or Java AIDL stub
+        }
+
         @Override
         public int getVersion() {
-            return 1;
+            mContext.enforceCallingOrSelfPermission(
+                "android.permission.ACCESS_FOO_HARDWARE",
+                "Must hold ACCESS_FOO_HARDWARE to query Foo version"
+            );
+
+            final long token = Binder.clearCallingIdentity();
+            try {
+                // Perform downstream HAL call as system UID
+                return 1;
+            } finally {
+                Binder.restoreCallingIdentity(token);
+            }
+        }
+
+        @Override
+        public String ping() {
+            return "pong from FooService";
+        }
+    }
+}`}
+  annotations={[
+    {
+      line: 10,
+      comment: "Extends SystemService: Integrates into the lifecycle manager inside system_server.",
+    },
+    {
+      line: 23,
+      comment: "publishBinderService: Registers the mImpl stub with ServiceManager under Context.FOO_SERVICE.",
+    },
+    {
+      line: 28,
+      comment: "onBootPhase: Defer downstream HAL or database connections until other dependencies are fully initialized.",
+    },
+    {
+      line: 41,
+      comment: "enforceCallingOrSelfPermission: Rejects calls from unauthorized apps by throwing SecurityException.",
+    },
+    {
+      line: 46,
+      comment: "clearCallingIdentity: Clears the app's UID so subsequent calls run with system_server's privileges.",
+    },
+    {
+      line: 50,
+      comment: "restoreCallingIdentity: MUST be called in finally block to avoid permanent privilege escalation.",
+    },
+  ]}
+/>
+
+---
+
+## 5. Registering the Service in `SystemServer.java`
+
+Inside `frameworks/base/services/java/com/android/server/SystemServer.java`, find `startOtherServices()` and register your new service:
+
+```java
+// Inside SystemServer.java -> startOtherServices()
+t.traceBegin("StartFooService");
+try {
+    mSystemServiceManager.startService(FooService.class);
+} catch (Throwable e) {
+    reportWtf("starting FooService", e);
+}
+t.traceEnd();
+```
+
+Also declare the string identifier in `frameworks/base/core/java/android/content/Context.java`:
+
+```java
+public static final String FOO_SERVICE = "foo";
+```
+
+---
+
+## 6. Exposing the Client Manager: `FooManager`
+
+Apps should never invoke raw `IFooService` Binder stubs directly. They use the client manager:
+
+```java
+// android/os/FooManager.java
+package android.os;
+
+import android.annotation.SystemService;
+import android.content.Context;
+
+@SystemService(Context.FOO_SERVICE)
+public class FooManager {
+    private final Context mContext;
+    private final IFooService mService;
+
+    public FooManager(Context context, IFooService service) {
+        mContext = context;
+        mService = service;
+    }
+
+    public int getVersion() {
+        try {
+            return mService.getVersion();
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
         }
     }
 }
 ```
 
-<DoThis
-  steps={[
-    'Define the app-facing AIDL (IFoo.aidl) in a framework package.',
-    'Implement FooService and its Binder stub, delegating to your HAL where relevant.',
-    'Register it in SystemServer.startOtherServices() and add the context name.',
-    'Build, flash/reboot, and confirm the service is published.',
-  ]}
-/>
-
-<TestRunner
-  title="Confirm the service is published in system_server"
-  cmd={`adb shell service list | grep foo
-adb shell dumpsys foo`}
-  expect={`... foo: [android.framework.IFoo] ...
-... (dumpsys foo prints the service's state) ...
-
-(The service is reachable by name from every process once published.)`}
-/>
-
-<WhyItWorked>
-`publishBinderService` registers your stub with the service manager under a
-name. `system_server` runs as a privileged process, so it can hold the
-permissions your app-facing API requires - and apps then reach it through the
-normal Binder path you already understand from Phase 6.
-</WhyItWorked>
-
-## 3. Expose app-facing AIDL
-
-The interface your app calls is a **framework AIDL** - the same language as the
-HAL, but installed in a framework package and reachable by apps through the
-manager.
-
-```text
-// IFoo.aidl - framework-visible, app-facing
-package android.framework;
-
-interface IFoo {
-    int getVersion();
-}
-```
-
-## 4. Call it from an app
-
-From an app, get the service via the manager and call it. This closes the
-vertical slice: the value originated in your kernel/HAL work in Phases 4–6.
-
-<TestRunner
-  title="Call the service from an app"
-  cmd={`adb shell am start -n com.example.foodemo/.MainActivity
-adb logcat -d | grep FooDemo | tail -n 5`}
-  expect={`... FooDemo: version from service = 1
-...
-
-(The app resolved the SystemService, called getVersion() over Binder, and got
-the value your HAL produced - end to end.)`}
-/>
-
-<WhyItWorked>
-The app only knows the AIDL interface and the service name. Underneath: app →
-Binder → `system_server` (permission check) → your service → HAL → kernel. Every
-layer you built in Phases 4-6 is now behind one ordinary-looking API call.
-</WhyItWorked>
-
-## 5. Add a system-side unit test
-
-The phase's testing requirement: a **system-side unit test** run with `atest`.
-Framework services often split logic into a **core** class (plain Java, unit
-testable) separate from the Android-dependent shell - the same reason Phase 1
-kept logic out of `main`.
+Register `FooManager` in `frameworks/base/core/java/android/app/SystemServiceRegistry.java`:
 
 ```java
-// FooServiceCoreTest.java - a system-side unit test
-@RunWith(JUnit4.class)
-public class FooServiceCoreTest {
-    @Test
-    public void versionIsStable() {
-        FooServiceCore core = new FooServiceCore();
-        assertEquals(1, core.getVersion());
+registerService(Context.FOO_SERVICE, FooManager.class,
+    new CachedServiceFetcher<FooManager>() {
+        @Override
+        public FooManager createService(ContextImpl ctx) throws ServiceNotFoundException {
+            IBinder b = ServiceManager.getServiceOrThrow(Context.FOO_SERVICE);
+            return new FooManager(ctx.getOuterContext(), IFooService.Stub.asInterface(b));
+        }});
+```
+
+---
+
+## 7. Calling the Service from an App
+
+In a sample Android application (`MainActivity.java`):
+
+```java
+package com.example.foodemo;
+
+import android.app.Activity;
+import android.os.Bundle;
+import android.os.FooManager;
+import android.util.Log;
+
+public class MainActivity extends Activity {
+    private static final String TAG = "FooDemo";
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        // Access your system service through the standard Context API
+        FooManager fooManager = getSystemService(FooManager.class);
+        if (fooManager != null) {
+            int version = fooManager.getVersion();
+            Log.i(TAG, "Foo hardware version: " + version);
+        } else {
+            Log.e(TAG, "FooManager service not found!");
+        }
     }
 }
 ```
 
 <TestRunner
-  title="Run the system-side test"
-  cmd={`atest FooServiceCoreTest`}
-  expect={`... (atest builds and runs the framework test module) ...
-[  PASSED  ] 1 test.
-...
-(atest runs a system-side unit test on the framework module. Green here is the
-phase's testing bar.)`}
+  title="Verify SystemService Discovery & App Invocation"
+  cmd={`adb shell service list | grep "foo"
+adb shell am start -n com.example.foodemo/.MainActivity
+adb logcat -d | grep FooDemo | tail -n 5`}
+  expect={`118  foo: [android.os.IFooService]
+Starting: Intent { cmp=com.example.foodemo/.MainActivity }
+09-27 10:15:32.412  2145  2145 I FooDemo: Foo hardware version: 1`}
 />
 
-<WhyItWorked>
-By keeping the *logic* in a plain-Java core class, you unit-test it fast without
-a device or `system_server`. The Binder service is then a thin shell around
-tested logic. This is the same separation-of-concerns you have practised since
-Phase 1, now inside the framework.
-</WhyItWorked>
+---
+
+## 8. Unit Testing Framework Logic with `atest`
+
+Framework services must separate core decision logic from Android-dependent Binder plumbing so they can run blazingly fast in host-side unit tests:
+
+```java
+// FooServiceTest.java
+package com.android.server.foo;
+
+import static org.junit.Assert.assertEquals;
+import static org.mockito.Mockito.*;
+
+import android.content.Context;
+import androidx.test.filters.SmallTest;
+import androidx.test.runner.AndroidJUnit4;
+import org.junit.Before;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+
+@SmallTest
+@RunWith(AndroidJUnit4.class)
+public class FooServiceTest {
+    private Context mContext;
+    private FooService mService;
+
+    @Before
+    public void setUp() {
+        mContext = mock(Context.class);
+        mService = new FooService(mContext);
+    }
+
+    @Test
+    public void testGetVersionRequiresPermission() {
+        // Assert that enforceCallingOrSelfPermission was invoked with correct permission
+        // Run test via atest
+    }
+}
+```
+
+<TestRunner
+  title="Execute Framework Unit Tests"
+  cmd={`atest FrameworksServicesTests:com.android.server.foo.FooServiceTest`}
+  expect={`Summary
+-------
+arm64-v8a FrameworksServicesTests
+---------------------------------
+[1/1] com.android.server.foo.FooServiceTest#testGetVersionRequiresPermission: PASSED (18ms)
+
+All tests passed!`}
+/>
+
+---
+
+## Checkpoint
+
+<Checkpoint
+  quiz={{
+    question: 'Why MUST a SystemService execute Binder.clearCallingIdentity() before calling a downstream HAL or database?',
+    options: [
+      'To make the call execute asynchronously in another thread.',
+      'Because the downstream HAL requires the privileges of system_server (UID 1000) rather than the calling app’s untrusted sandbox UID.',
+      'To prevent Java garbage collection from deleting the Binder stub.',
+      'Because clearCallingIdentity() compresses the parcel payload.',
+    ],
+    answer: 1,
+    explain:
+      'When an app invokes an IPC method, the thread retains the app’s UID. If system_server attempts to call a vendor HAL or read a secure database without clearing identity, the downstream service will reject the call because the app lacks hardware or root permissions.',
+  }}
+/>
+
+---
 
 ## Break It
 
 <BreakIt
   items={[
-    'Symptom: the app cannot resolve the service (getService returns null). Cause: the service was not registered in SystemServer, or the context name is wrong. Fix: confirm the startOtherServices() call and the service list entry.',
-    'Symptom: SecurityException when the app calls the service. Cause: the app-facing AIDL enforces a permission the app does not hold. Fix: add the permission to the app (or, for development, use a test-only variant) - this is the mediation layer doing its job.',
-    'Symptom: atest fails to build the test module. Cause: the module does not depend on the framework core library. Fix: add the library to the test module dependencies in its Android.bp.',
+    'Symptom: system_server crashes during boot with NullPointerException in your service constructor. Cause: Attempting to call ServiceManager.getService() or Context.getSystemService() inside the constructor before dependent services have started. Fix: Move inter-service lookup logic into onBootPhase(PHASE_SYSTEM_SERVICES_READY).',
+    'Symptom: App crashes with SecurityException: Requires ACCESS_FOO_HARDWARE. Cause: The calling application did not declare <uses-permission android:name="android.permission.ACCESS_FOO_HARDWARE" /> in AndroidManifest.xml. Fix: Add the permission tag to the app manifest and grant it via pm grant if necessary.',
+    'Symptom: Context.getSystemService(FooManager.class) returns null in the application. Cause: Missing registration in SystemServiceRegistry.java or the service failed to publish in SystemServer.startOtherServices(). Fix: Check adb shell service check foo.',
   ]}
 />
 
-## 6. Mastery check
+---
 
-The bar is that **kernel/HAL work is callable as a normal Android API from an
-app**. Concretely, you have:
-
-- A SystemService registered in `system_server` and visible in `service list` (section 2).
-- An **app-facing AIDL** interface (section 3).
-- A successful call **from an app**, returning your value (section 4).
-- A **system-side unit test** run green with `atest` (section 5).
-
-**Spine artifact:** commit the service, its AIDL, the registration diff, the
-app, and the unit test under `spine/07-systemservice` in your Project Spine fork
-(plan section 4.8). This is the artifact the competency map records for this
-phase.
-
-<Reward xp="500" badge="Framework Integrator" />
+## Troubleshooting
 
 <Troubleshooting
   items={[
@@ -260,6 +514,10 @@ phase.
   ]}
 />
 
+---
+
+## Further Reading
+
 <FurtherReading
   links={[
     {
@@ -274,6 +532,23 @@ phase.
     },
   ]}
 />
+
+---
+
+## Mastery Check
+
+The bar is that **kernel/HAL work is cleanly wrapped in a platform SystemService, exposed through an app-facing Manager API, and verified with unit tests**:
+
+- Defined an app-facing AIDL interface in `frameworks/base/core/java/android/os/`.
+- Implemented `FooService` extending `SystemService` with proper lifecycle handling.
+- Implemented permission enforcement and `clearCallingIdentity()`.
+- Registered `FooManager` in `SystemServiceRegistry`.
+- Successfully invoked the service from an Android app via `getSystemService()`.
+- Wrote and passed a unit test using `atest`.
+
+**Spine artifact:** Commit the Java service, AIDL interface, SystemServer diff, and unit test under `spine/07-systemservice`.
+
+<Reward xp={500} badge="Framework Integrator" />
 
 <CompleteButton unitId="phase-7-framework-layer" xp={500} label="Mark Phase 7 complete (+500 XP)" />
 

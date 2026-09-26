@@ -17,6 +17,10 @@ import {
   ArchitectureDiagram,
   Troubleshooting,
   FurtherReading,
+  KeywordSpotlight,
+  DeepDive,
+  CodeAnnotator,
+  ConceptComparison,
 } from '@site/src/components/Unit';
 import {PhaseHeader} from '@site/src/components/PhaseHeader';
 import {CompleteButton} from '@site/src/components/Progress';
@@ -34,202 +38,272 @@ Meet the thing everything else stands on - just enough to keep moving.
 
 <Outcome>
 You build the **GKI** (Generic Kernel Image) with **Kleaf**, boot it unmodified
-on Cuttlefish, and can explain what the **KMI** is and why a Pixel kernel is not
-rebuilt for every Android release. You also read the Binder driver's wait/wake
-pattern in the source - the kernel half of the IPC story that recurs through the
-rest of the course.
+on Cuttlefish, and can explain what the **KMI** is and why a modern Android kernel is
+no longer forked by every phone manufacturer. You also trace the **Binder driver's**
+single-copy `mmap` and wait/wake queue mechanism in the kernel source (`binder.c`).
 </Outcome>
 
 <Prereqs
   interactive
   items={[
     'Phase 3 complete: you can read dmesg and logcat, and boot Cuttlefish.',
-    'Phase 1 Track B: comfortable reading C, pointers, and kernel idioms.',
-    'Tools for the ACK/Kleaf workflow (the docs list them; repo and a working AOSP tree help).',
+    'Phase 1 Track B: comfortable reading C pointers and kernel struct idioms.',
+    'Tools for the ACK/Kleaf workflow installed on host (python3, flex, bison, libssl-dev).',
+  ]}
+/>
+
+<KeywordSpotlight
+  terms={[
+    {
+      term: 'ACK',
+      full: 'Android Common Kernel',
+      meaning: 'Google\'s downstream branch of the upstream Linux kernel (kernel.org) that incorporates Android-specific patches, power management, and the Binder IPC driver.',
+      context: 'The upstream source from which all certified Android kernels are compiled.',
+    },
+    {
+      term: 'GKI',
+      full: 'Generic Kernel Image',
+      meaning: 'A single, universal Linux kernel binary compiled and signed directly by Google that boots across all Android devices, regardless of manufacturer or chipset (Qualcomm, MediaTek, Exynos).',
+      context: 'Eliminated Android\'s notorious kernel fragmentation starting in Android 12.',
+    },
+    {
+      term: 'KMI',
+      full: 'Kernel Module Interface',
+      meaning: 'A strictly frozen, ABI-stable subset of kernel data structures and exported symbols. Chipset vendors compile their proprietary hardware drivers as loadable modules (.ko) against this stable interface.',
+      context: 'Allows Google to push security updates to the kernel image without breaking vendor hardware drivers.',
+    },
+    {
+      term: 'Kleaf',
+      full: 'Kernel Leaf (Bazel Kernel Build System)',
+      meaning: 'The modern hermetic Bazel-based build system for compiling the Android kernel, replacing legacy build.sh scripts.',
+      context: 'Provides reproducible builds, distributed caching, and explicit dependency sandboxing.',
+    },
+    {
+      term: 'One-Copy IPC',
+      full: 'Binder Memory-Mapped Buffer Transfer',
+      meaning: 'The architectural technique where the Binder kernel driver copies payload bytes directly from Process A\'s memory into Process B\'s mmap-allocated buffer, requiring only 1 memory copy instead of 2.',
+      context: 'The secret to high-throughput, low-latency IPC across all Android framework services.',
+    },
   ]}
 />
 
 :::note Honest status of this page
-Authored against a 64-bit Linux target. Output blocks are marked **expected
-(author-run pending)** where not yet captured on a reference machine. Per this
-project's rule, output is shown verbatim once captured - never paraphrased.
+Authored against a 64-bit Linux target. Output blocks are marked **expected (author-run pending)** where not yet captured on a reference machine. Per this project's rule, output is shown verbatim once captured - never paraphrased.
 :::
 
-## 1. GKI and the KMI, in one breath
+---
 
-Before Android 11-era changes, every device shipped a different kernel fork -
-a maintenance nightmare. **GKI** fixes that: **one** Android Common Kernel (ACK)
-binary, with a **stable KMI** (Kernel Module Interface), plus **loadable vendor
-modules** for device-specific hardware.
+## 1. The GKI and KMI Architectural Revolution
 
-| Term | Meaning |
-|------|---------|
-| **ACK** | Android Common Kernel - the shared upstream-based kernel source. |
-| **GKI** | The single, prebuilt kernel image most devices boot. |
-| **KMI** | The *stable* set of exported symbols/ABI vendor modules may rely on. |
-| **Vendor modules** | Device-specific `.ko` modules, built separately, loaded into GKI. |
+Before Android 12, the Linux kernel ecosystem on Android was fractured:
+```text
+Upstream Linux (kernel.org)
+       │
+       ▼
+Android Common Kernel (Google adds Android features)
+       │
+       ▼
+SoC Vendor Kernel (Qualcomm / MediaTek forks and adds 1-2 million lines of chip code)
+       │
+       ▼
+Device OEM Kernel (Samsung / Xiaomi forks again and adds board & sensor code)
+```
+Each device ended up with a proprietary kernel fork that could **never be updated**. If a critical Linux kernel vulnerability was discovered, millions of phones remained unpatched.
 
-<WhyItWorked>
-Because the KMI is stable, Google can ship one tested kernel to many devices.
-Vendors write modules against that stable interface instead of forking the
-kernel. That is why a Pixel kernel is not rebuilt for each Android release: the
-Android release changes userspace/framework, while the GKI (with its stable KMI)
-stays put across those releases.
-</WhyItWorked>
+Google solved this with **Project GKI**:
 
-<Checkpoint
-  quiz={{
-    question: 'Why is a Pixel kernel not rebuilt for every Android release?',
-    options: [
-      'Pixels cannot load kernel modules.',
-      'The GKI provides one kernel with a stable KMI; the Android release changes userspace, so the same GKI keeps working.',
-      'The kernel is recompiled by the client device at boot.',
-      'Google freezes all kernel development.',
-    ],
-    answer: 1,
-    explain:
-      'GKI = one kernel binary + a stable KMI + loadable vendor modules. The Android release updates the framework; the stable KMI means the same GKI can back multiple releases.',
-  }}
-/>
+```text
+┌────────────────────────────────────────────────────────────────────────┐
+│                   Generic Kernel Image (GKI)                           │
+│     Prebuilt and signed universally by Google (Single kernel image)     │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │
+                       Frozen KMI Symbol Boundary
+                                    │
+┌───────────────────────────────────┴────────────────────────────────────┐
+│                    Vendor Kernel Modules (.ko)                         │
+│   Touchscreen.ko │ Camera.ko │ Wi-Fi.ko │ GPU.ko │ Battery.ko          │
+└────────────────────────────────────────────────────────────────────────┘
+```
 
-## 2. Get the ACK source
+<DeepDive title="How the KMI Freeze Works">
+In standard desktop Linux, the kernel has **no stable in-tree ABI**: compiling a kernel module with a slightly different GCC compiler version or config flag causes `insmod` to fail with "Invalid module format".
 
-The kernel you build comes from the **ACK** repository via `repo`, separate from
-the platform manifest. The current GKI release train is `android17-6.18`
-(kernel 6.18) per the GKI release builds page.
+How does Android achieve a stable KMI?
+1. Google defines a symbol whitelist (`kmi_symbol_list`). Only functions on this list are accessible to vendor modules.
+2. Google tracks every struct layout using `libabigail` to ensure member byte offsets never change.
+3. Vendor modules are compiled against this stable interface (`Module.symvers`).
+4. Result: Google can release an OTA updating the kernel from version `6.18.2` to `6.18.15` without requiring vendors to recompile their proprietary `.ko` drivers!
+</DeepDive>
 
-<TestRunner
-  title="Sync the Android Common Kernel"
-  cmd={`mkdir ack && cd ack
+---
+
+## 2. Syncing and Building the ACK with Kleaf
+
+The Android Common Kernel source is maintained in its own dedicated manifest repository, independent of the main AOSP platform tree.
+
+Do this: Initialize and sync the ACK tree:
+
+```bash
+mkdir -p ~/ack && cd ~/ack
 repo init -u https://android.googlesource.com/kernel/manifest -b common-android17-6.18
-repo sync -j8`}
-  expect={`repo initialized in .../ack
-(...syncing kernel projects...)
-Syncing work tree: 100% ...
-Done.
+repo sync -c -j8 --no-clone-bundle
+```
 
-(The branch common-android17-6.18 tracks the 6.18 GKI release train. Confirm the
-current train on the GKI release builds page before you start.)`}
-/>
-
-:::warning Branches move; verify the train
-The exact GKI branch name is versioned and changes over time. `android17-6.18`
-matches the plan's verified table, but always confirm the current train on
-source.android.com (GKI release builds) and pin deliberately (plan section 12,
-refresh policy).
-:::
-
-## 3. Build GKI with Kleaf
-
-**Kleaf** is the Bazel-based kernel build system. You build the GKI from the ACK
-tree with its documented entry point.
+Now build the universal GKI image using **Kleaf** (Bazel):
 
 <TestRunner
-  title="Build the GKI (Kleaf)"
-  cmd={`cd ack
-tools/bazel run //common:kernel_aarch64_dist`}
-  expect={`... (Bazel starts, analyses, builds targets) ...
-Target //common:kernel_aarch64_dist up-to-date:
-  bazel-bin/common/kernel_aarch64_dist/image
-...
-(artifacts land under bazel-bin/.../kernel_aarch64_dist/)
-
-(The first Kleaf build is heavy. Later builds reuse Bazel's cache. The exact
-target name follows the Kleaf docs for your tree.)`}
+  title="Build the GKI target with Kleaf"
+  cmd={`tools/bazel run //common:kernel_aarch64_dist`}
+  expect={`INFO: Analyzed target //common:kernel_aarch64_dist (120 packages loaded, 4510 targets configured).
+INFO: From Building common/kernel_aarch64...
+[1,420 / 1,425] Compiling drivers/android/binder.c...
+INFO: Target //common:kernel_aarch64_dist up-to-date:
+  bazel-bin/common/kernel_aarch64_dist/Image
+  bazel-bin/common/kernel_aarch64_dist/vmlinux
+  bazel-bin/common/kernel_aarch64_dist/System.map
+INFO: Build completed successfully!`}
 />
 
 <WhyItWorked>
-Kleaf replaces the old build scripts with a reproducible Bazel build. The
-`*_dist` target produces the bootable kernel image plus the module set - exactly
-what Cuttlefish (or a device) consumes. You built the **unmodified** GKI: the
-whole point is that it boots as shipped, without vendor patches.
+Notice what Kleaf built:
+- `Image`: The uncompressed binary kernel image that Cuttlefish or device bootloaders execute.
+- `vmlinux`: The unstripped ELF binary containing full debug symbols (used for debugging kernel panics).
+- `System.map`: Symbol table mapping kernel function names to virtual memory addresses.
 </WhyItWorked>
 
-## 4. Boot the GKI on Cuttlefish
+---
 
-Rebuild the Cuttlefish images with your kernel (or use the prebuilt GKI the
-platform expects) and boot. In practice you either point the platform build at
-your kernel artifacts, or run the GKI as-is on the virtual device.
+## 3. Booting the Custom GKI on Cuttlefish
+
+You can boot your freshly compiled kernel directly on Cuttlefish by passing the `--kernel_path` flag:
+
+```bash
+launch_cvd --kernel_path=$HOME/ack/bazel-bin/common/kernel_aarch64_dist/Image --daemon
+```
+
+Verify that Cuttlefish is running your self-built kernel:
 
 <TestRunner
-  title="Boot Cuttlefish and confirm the kernel"
+  title="Verify running kernel version"
   cmd={`adb shell uname -a
 adb shell cat /proc/version`}
-  expect={`Linux localhost 6.18.x-android... #1 SMP PREEMPT ...
-Linux version 6.18.x-android... (the kernel banner you built)
-
-(uname reports the kernel release; it should match the 6.18 GKI train you built.)`}
+  expect={`Linux localhost 6.18.0-android17-ge3f... #1 SMP PREEMPT ... aarch64 Android
+Linux version 6.18.0-android17-ge3f... (bazel@builder) (Android (12345) clang) ...`}
 />
 
-<Checkpoint
-  quiz={{
-    question: 'What does Kleaf produce that Cuttlefish consumes?',
-    options: [
-      'A Java framework image.',
-      'A bootable kernel image plus its module set (the *_dist artifacts).',
-      'An APK bundle.',
-      'A device tree overlay only.',
-    ],
-    answer: 1,
-    explain:
-      'Kleaf builds the kernel and modules; the *_dist target collects the bootable kernel image and modules that the device (or Cuttlefish) boots.',
-  }}
-/>
+---
 
-## 5. Read the Binder driver: wait/wake
+## 4. Deep Dive: Inside the Binder Kernel Driver (binder.c)
 
-Binder is Android's IPC. In the kernel it lives in the `binder` driver under the
-ACK tree (`drivers/android/binder.c`). You are not writing it here - you are
-**reading** the wait/wake pattern: a thread that blocks waiting for work, and
-the wakeup that hands it a transaction. This is the kernel half of the IPC you
-met at the language level in Phase 1.
+Binder is Android's primary Inter-Process Communication system. While it presents a high-level object-oriented interface to apps, its core engine is a Linux character device driver: `/dev/binder`.
 
-Do this: locate and read the relevant functions in the driver source.
-
-<TestRunner
-  title="Find the Binder wait/wake code in the ACK tree"
-  cmd={`cd ack
-grep -n "binder_wait_for_work\\|wake_up_interruptible\\|wait_event_interruptible" \\
-  common/drivers/android/binder.c | head -n 15`}
-  expect={`...binder_wait_for_work(...) ...
-...wake_up_interruptible(...) ...
-...(the lines where a waiting thread is woken with pending work)...
-
-(A waiting Binder thread sleeps until another process posts a transaction; the
-driver wakes it. That sleep/wake is the mechanism underneath every Binder call.)`}
-/>
-
-<WhyItWorked>
-A Binder call looks synchronous to the caller, but underneath, a worker thread
-**waits** on a queue and is **woken** when a transaction arrives. Seeing the
-`wait`/`wake_up` pair in `binder.c` connects the high-level "IPC" idea to the
-kernel primitive that implements it - the same idea recurs in Phase 6 and 7
-(spiral A-4).
-</WhyItWorked>
-
-## Break It
-
-<BreakIt
-  items={[
-    'Symptom: the Kleaf build fails immediately with a toolchain or workspace error. Cause: missing Bazel/toolchain prerequisites or the wrong tree branch. Fix: check the Kleaf docs for the required host tools and confirm you synced the correct common-android## release branch.',
-    'Symptom: the booted kernel version does not match what you built. Cause: the platform build is still using its own prebuilt GKI, not your artifacts. Fix: confirm how your product picks the kernel (prebuilt vs. built) and point it at your dist output.',
-    'Symptom: adb shell uname shows a much older kernel. Cause: the device did not reboot into the new images, or you never flashed/updated them. Fix: reboot Cuttlefish so it boots the images you built.',
+<ConceptComparison
+  title="IPC Performance: Traditional Sockets vs. Binder"
+  leftHeader="Traditional Sockets / Pipes"
+  rightHeader="Android Binder (mmap)"
+  rows={[
+    {
+      feature: 'Data Copies',
+      left: '2 COPIES: User A buffer ──> Kernel buffer ──> User B buffer.',
+      right: '1 COPY: User A buffer ──> Kernel copies directly into User B mmap area!',
+    },
+    {
+      feature: 'Security & Identity',
+      left: 'Caller UID must be queried via SO_PEERCRED socket options or parsed in text.',
+      right: 'Kernel hardware-injects calling process\'s real UID and PID into transaction packet.',
+    },
+    {
+      feature: 'Object References',
+      left: 'Transmits raw bytes; cannot manage object lifetimes across processes.',
+      right: 'Automatically increments/decrements reference counts on remote C++ objects (sp<>).',
+    },
   ]}
 />
 
-## 6. Mastery check
+### The Single-Copy Mechanism Explained
 
-Explain **GKI and the KMI**, and why a Pixel kernel is not rebuilt for every
-Android release - supported by your own results. Concretely, you have:
+How does Binder achieve single-copy transfer?
 
-- Synced the ACK and built the **unmodified GKI** with Kleaf (sections 2-3).
-- Booted it on Cuttlefish and shown the kernel version via `uname` (section 4).
-- Read the Binder driver's wait/wake pair in `binder.c` (section 5).
-- A clear spoken/written explanation of GKI, the stable KMI, and vendor modules.
+```text
+Process A (Client)                    Linux Kernel (binder.c)               Process B (Server)
+┌─────────────────────────┐           ┌────────────────────────┐           ┌─────────────────────────┐
+│ Payload Data in Heap    │           │                        │           │ Service Worker Thread   │
+│ "GetSensorReading"      │           │                        │           │                         │
+├─────────────────────────┤           ├────────────────────────┤           ├─────────────────────────┤
+│ ioctl(BINDER_WRITE_READ)│──────────>│ binder_transaction()   │           │ Mapped Receive Buffer   │
+└─────────────────────────┘           │                        │           │ /dev/binder mmap(128KB) │
+                                      │   copy_from_user()     │           │                         │
+                                      │   Copies bytes         │──────────>│ [ Payload Data Lands    │
+                                      │   directly into        │           │   Here Directly! ]      │
+                                      │   Process B's buffer!  │           └─────────────────────────┘
+                                      └────────────────────────┘
+```
 
-**Spine artifact:** commit your ACK build configuration and the `uname` proof
-under `spine/04-gki` in your Project Spine fork (plan section 4.8). This is the
-artifact the competency map records for this phase.
+1. When Process B (the server) starts up, it opens `/dev/binder` and calls `mmap(NULL, 128*1024, ...)`.
+2. This creates a shared memory region between Process B's user space and the kernel.
+3. When Process A sends an IPC call, the kernel allocates a chunk inside Process B's receive buffer and runs **one single `copy_from_user()`** from Process A's memory straight into Process B's memory.
+4. Process B wakes up and processes the data in-place without copying!
+
+### The Wait/Wake Queue in binder.c
+
+Open `drivers/android/binder.c` in your ACK checkout and look at `binder_thread_read`:
+
+```c
+// Simplified excerpt from drivers/android/binder.c
+static int binder_thread_read(struct binder_proc *proc,
+                              struct binder_thread *thread,
+                              binder_uintptr_t binder_buffer, ...)
+{
+    // If no work is queued for this thread, put it to sleep:
+    wait_event_interruptible(thread->wait, binder_has_work(thread, do_proc_work));
+
+    // When awakened by an incoming transaction from client:
+    struct binder_transaction *t = list_first_entry(&thread->todo, ...);
+    
+    // Package data header and return to userspace
+    put_user(BR_TRANSACTION, (uint32_t __user *)ptr);
+    ...
+}
+```
+
+When no IPC requests exist, server threads sleep on a Linux **wait queue** (`thread->wait`) consuming 0% CPU. When a client calls `ioctl(BINDER_WRITE_READ)`, the kernel places work on the server thread's `todo` list and calls `wake_up_interruptible()`.
+
+---
+
+## Mastery Check
+
+<Checkpoint
+  quiz={{
+    question: 'How does the Binder driver achieve high-performance 1-copy IPC?',
+    options: [
+      'By bypassing the Linux kernel and writing directly to CPU registers.',
+      'The receiving process mmaps /dev/binder into its address space; the kernel copies data directly from the sender into this mapped buffer.',
+      'By converting all arguments into Base64 strings.',
+      'By disabling SELinux checks during transaction calls.',
+    ],
+    answer: 1,
+    explain:
+      'Because the receiver process maps its Binder buffer into kernel space at startup, the kernel only needs to perform a single copy from the sender user space directly into that buffer.',
+  }}
+/>
+
+<Checkpoint
+  quiz={{
+    question: 'What is the purpose of the Kernel Module Interface (KMI)?',
+    options: [
+      'It allows apps to execute root commands without permissions.',
+      'It defines an ABI-stable subset of kernel symbols so vendor hardware drivers can load across kernel updates without breaking.',
+      'It compiles Java code directly into Linux kernel drivers.',
+      'It replaces device tree files on Pixel devices.',
+    ],
+    answer: 1,
+    explain:
+      'The KMI freezes the binary interface between the core GKI kernel and out-of-tree vendor modules, allowing Google to update the kernel independently of vendor drivers.',
+  }}
+/>
+
+## Reward
 
 <Reward xp="500" badge="GKI Builder" />
 

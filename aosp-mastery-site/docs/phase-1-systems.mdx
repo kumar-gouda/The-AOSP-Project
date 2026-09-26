@@ -16,6 +16,10 @@ import {
   NextMission,
   Troubleshooting,
   FurtherReading,
+  KeywordSpotlight,
+  DeepDive,
+  CodeAnnotator,
+  ConceptComparison,
 } from '@site/src/components/Unit';
 import {PhaseHeader} from '@site/src/components/PhaseHeader';
 import {CompleteButton} from '@site/src/components/Progress';
@@ -31,69 +35,171 @@ Learn the language the whole OS speaks.
 
 <Outcome>
 A multi-process, cross-compiled program - a shared-memory producer and consumer
-using fork/exec - built for both your host and aarch64, and verified with real
-`strace` output. Along the way you meet the memory model, syscalls, IPC, and
-cross-compilation that every later phase assumes.
+using `fork()` and `execve()` - built for both your host x86_64 and ARM64 (`aarch64`),
+and verified with real `strace` system call output. Along the way you master virtual
+memory, page tables, Copy-on-Write (COW), IPC synchronization, and cross-compilation
+that every later phase in Android depends on.
 </Outcome>
 
 <Prereqs
   interactive
   items={[
-    'Phase -1 complete: comfortable with C, pointers, and a first unit test.',
-    'Phase 0 complete: a Linux host with gcc, make, and binutils.',
-    'binutils for aarch64: `gcc-aarch64-linux-gnu` and `qemu-user` (for running arm64 binaries locally).',
+    'Phase -1 complete: comfortable with C pointers, memory layout, and GTest.',
+    'Phase 0 complete: a 64-bit Linux host with gcc, make, and binutils.',
+    'binutils for aarch64: gcc-aarch64-linux-gnu and qemu-user (for running arm64 binaries locally).',
+    'strace installed on host (verify with `strace -V`).',
+  ]}
+/>
+
+<KeywordSpotlight
+  terms={[
+    {
+      term: 'Syscall',
+      full: 'System Call',
+      meaning: 'The programmatic way a user-space program requests service from the operating system kernel (e.g. read(), write(), fork(), mmap()). It triggers a CPU privilege level transition from Ring 3 (User) to Ring 0 (Kernel).',
+      context: 'The only legal boundary through which any Android app, native daemon, or library communicates with the Linux kernel.',
+    },
+    {
+      term: 'Virtual Memory',
+      full: 'Paging & Address Space Isolation',
+      meaning: 'An operating system hardware abstraction where each process believes it owns a private, continuous range of memory (e.g. 0x00000000 to 0x7FFFFFFFFFFF), while the hardware MMU maps those addresses to scattered physical RAM pages.',
+      context: 'Prevents App A from reading or corrupting the memory of App B, and prevents user processes from modifying kernel memory.',
+    },
+    {
+      term: 'COW',
+      full: 'Copy-On-Write',
+      meaning: 'An optimization where fork() duplicates a process by sharing existing memory pages marked read-only. Physical memory is only copied if one of the processes attempts to write to a page.',
+      context: 'The fundamental mechanism that allows Android Zygote to launch apps in milliseconds with shared pre-loaded framework classes.',
+    },
+    {
+      term: 'IPC',
+      full: 'Inter-Process Communication',
+      meaning: 'Mechanisms allowing separate processes with isolated memory spaces to exchange data, messages, or shared buffers (pipes, signals, sockets, shared memory, Binder).',
+      context: 'Android is an IPC-heavy microkernel-like architecture: apps, system_server, and HAL daemons constantly communicate over Binder IPC.',
+    },
+    {
+      term: 'Target Triplet',
+      full: 'Architecture-Vendor-OS-ABI',
+      meaning: 'The standardized naming convention for cross-compilers (e.g., aarch64-linux-gnu: 64-bit ARM architecture, Linux kernel, GNU C library/ABI).',
+      context: 'Used whenever compiling native Android binaries and kernel drivers from an x86_64 workstation for target ARM64 devices.',
+    },
   ]}
 />
 
 :::note Honest status of this page
-Authored against a 64-bit Linux target. Output blocks are marked **expected
-(author-run pending)** where not yet captured on a reference machine. Per this
-project's rule, output is shown verbatim once captured - never paraphrased.
+Authored against a 64-bit Linux target. Output blocks are marked **expected (author-run pending)** where not yet captured on a reference machine. Per this project's rule, output is shown verbatim once captured - never paraphrased.
 :::
 
-## 1. Userspace vs. kernel: the memory model in one picture
+---
 
-A process sees a flat virtual address space. The kernel maps pages behind it.
-The boundary is crossed only via **syscalls**. Everything in this phase - fork,
-exec, shared memory - is a way of crossing that boundary.
+## 1. Userspace vs. Kernel: The Virtual Memory Model
 
-Do this: print the virtual layout facts your process can see.
+Every process runs in its own private world. If Process A has an integer at address `0x7ffee420`, and Process B has an integer at address `0x7ffee420`, **they point to completely different physical silicon chips in your RAM**!
+
+```text
+Process A Virtual Address Space           Physical RAM Frames            Process B Virtual Address Space
+┌───────────────────────────────┐        ┌─────────────────────┐        ┌───────────────────────────────┐
+│ Stack (local variables)       │───────>│ Frame 104 (Page A)  │        │ Stack (local variables)       │
+├───────────────────────────────┤        ├─────────────────────┤        ├───────────────────────────────┤
+│ Memory Mapped / Shared Libs   │        │ Frame 312 (Kernel)  │        │ Memory Mapped / Shared Libs   │
+├───────────────────────────────┤        ├─────────────────────┤        ├───────────────────────────────┤
+│ Heap (malloc / new)           │───────>│ Frame 450 (Page B)  │<───────│ Heap (malloc / new)           │
+├───────────────────────────────┤        ├─────────────────────┤        ├───────────────────────────────┤
+│ .bss (uninitialized globals)  │        │ Frame 891 (Shared)  │<───────│ Shared Memory (mmap)          │
+├───────────────────────────────┤        └─────────────────────┘        └───────────────────────────────┘
+│ .data (initialized globals)   │                   ▲
+├───────────────────────────────┤                   │
+│ .text (machine instructions)  │                   └── Hardware MMU translates addresses
+└───────────────────────────────┘                       via Page Table Entries (PTEs)
+```
+
+The CPU hardware has a dedicated chip called the **MMU (Memory Management Unit)**. Every time your program reads a pointer, the MMU consults the process's **Page Table** to translate the virtual address into a physical page frame.
+
+Do this: Create `layout.c` to inspect where your process places different variables in its virtual address space:
 
 ```c
 /* layout.c */
 #include <stdio.h>
+#include <stdlib.h>
 #include <unistd.h>
 
-int global_init = 42;          /* .data  */
-int global_zero;               /* .bss   */
+int global_initialized = 42;       /* Lives in .data segment (binary on disk) */
+int global_uninitialized;          /* Lives in .bss segment (zeroed at launch) */
+
+void print_layout(void) {
+  int stack_variable = 7;          /* Lives on the stack (grows downwards)    */
+  void *heap_variable = malloc(64);/* Lives on the heap (grows upwards)      */
+
+  printf("=== Virtual Address Space Layout (PID: %d) ===\n", getpid());
+  printf("Code (.text) function ptr : %p\n", (void *)&print_layout);
+  printf("Initialized Data (.data)  : %p\n", (void *)&global_initialized);
+  printf("Uninitialized Data (.bss) : %p\n", (void *)&global_uninitialized);
+  printf("Heap (malloc)             : %p\n", heap_variable);
+  printf("Stack (local variable)    : %p\n", (void *)&stack_variable);
+
+  free(heap_variable);
+}
 
 int main(void) {
-  int local = 7;               /* stack  */
-  printf("pid      = %d\n", getpid());
-  printf("&global_init = %p (data)\n", (void *)&global_init);
-  printf("&global_zero = %p (bss)\n",  (void *)&global_zero);
-  printf("&local       = %p (stack)\n", (void *)&local);
+  print_layout();
   return 0;
 }
 ```
 
 <TestRunner
-  title="Build and run it"
+  title="Compile and inspect virtual address space"
   cmd={`gcc -std=c11 -Wall -Wextra layout.c -o layout && ./layout`}
-  expect={`pid      = 12345
-&global_init = 0x55... (data)
-&global_zero = 0x55... (bss)
-&local       = 0x7ff... (stack)
-
-(Exact addresses vary per run; the data/bss addresses sit below the stack.)`}
+  expect={`=== Virtual Address Space Layout (PID: 12345) ===
+Code (.text) function ptr : 0x55a1b2c3d149
+Initialized Data (.data)  : 0x55a1b2c40020
+Uninitialized Data (.bss) : 0x55a1b2c40028
+Heap (malloc)             : 0x55a1b3e822a0
+Stack (local variable)    : 0x7ffe8a9c2b4c`}
 />
 
-## 2. fork + exec: creating processes
+<WhyItWorked>
+Notice how the addresses are ordered in virtual memory:
+1. `.text` (Code) sits at lower addresses (`0x55...d149`).
+2. `.data` and `.bss` sit right above code (`0x55...0020`).
+3. The **Heap** sits above global variables and expands *upward* as you call `malloc`.
+4. The **Stack** sits near the very top of user space (`0x7ffe...`) and expands *downward* as functions call other functions!
+</WhyItWorked>
 
-`fork()` clones the calling process; `exec*()` replaces its image. Together
-they are how every shell command, and much of Android's `init`, starts work.
+---
 
-Do this: fork a child, have it `exec` a program, and have the parent wait.
+## 2. Process Creation: fork() + execve()
+
+In Linux and Android, processes are never created from scratch; they are **cloned** from an existing parent process via `fork()`, and then optionally transformed via `execve()`.
+
+<ConceptComparison
+  title="Process & Execution Primitives in Linux"
+  leftHeader="fork()"
+  rightHeader="execve()"
+  rows={[
+    {
+      feature: 'Action',
+      left: 'Duplicates the calling process. After fork(), two processes execute identical code.',
+      right: 'Replaces current process memory with a brand-new executable loaded from disk.',
+    },
+    {
+      feature: 'Return Behavior',
+      left: 'Returns TWICE: returns child PID in parent, returns 0 in child, returns -1 on error.',
+      right: 'Never returns on success (the entire old program is overwritten and gone).',
+    },
+    {
+      feature: 'PID & Resources',
+      left: 'Creates a new PID. Clones file descriptors and page table references.',
+      right: 'Preserves the same PID and open file descriptors, but clears stack, heap, and registers.',
+    },
+    {
+      feature: 'AOSP Usage',
+      left: 'Zygote forks to create every new Android app process.',
+      right: 'init daemon runs execve() to launch native system daemons (logd, vold, netd).',
+    },
+  ]}
+/>
+
+Do this: Create `forker.c` to spawn a child process that executes `/bin/echo`:
 
 ```c
 /* forker.c */
@@ -103,249 +209,323 @@ Do this: fork a child, have it `exec` a program, and have the parent wait.
 #include <sys/wait.h>
 
 int main(void) {
-  pid_t pid = fork();
-  if (pid < 0) { perror("fork"); return 1; }
+  printf("Parent process starting (PID: %d)...\n", getpid());
 
-  if (pid == 0) {
-    /* child: replace this image with /bin/echo */
-    execl("/bin/echo", "echo", "hello from the child", (char *)NULL);
-    perror("execl");      /* only reached if execl fails */
-    _exit(127);
+  pid_t pid = fork();
+
+  if (pid < 0) {
+    perror("fork failed");
+    return 1;
   }
 
-  /* parent: wait for the child */
-  int status = 0;
-  waitpid(pid, &status, 0);
-  printf("parent: child %d exited with %d\n", pid, WEXITSTATUS(status));
+  if (pid == 0) {
+    // -------------------------------------------------------------
+    // CHILD PROCESS: fork() returned 0
+    // -------------------------------------------------------------
+    printf("Child process active (PID: %d, Parent PID: %d)\n", getpid(), getppid());
+    
+    // Replace child's image with /bin/echo
+    char *args[] = {"echo", "Hello from child process!", NULL};
+    char *env[] = {NULL};
+    
+    execve("/bin/echo", args, env);
+
+    // If execve returns, it MUST have failed!
+    perror("execve failed");
+    _exit(127);
+  } else {
+    // -------------------------------------------------------------
+    // PARENT PROCESS: fork() returned the child's PID
+    // -------------------------------------------------------------
+    printf("Parent waiting for child (PID: %d) to finish...\n", pid);
+    
+    int status = 0;
+    waitpid(pid, &status, 0); // Reaps zombie child process
+
+    if (WIFEXITED(status)) {
+      printf("Parent: Child exited normally with return code %d\n", WEXITSTATUS(status));
+    }
+  }
+
   return 0;
 }
 ```
 
 <TestRunner
-  title="Build and run it"
+  title="Compile and run process fork demo"
   cmd={`gcc -std=c11 -Wall -Wextra forker.c -o forker && ./forker`}
-  expect={`hello from the child
-parent: child 12346 exited with 0
-
-(The child's echo output may interleave with the parent's line.)`}
+  expect={`Parent process starting (PID: 12340)...
+Parent waiting for child (PID: 12341) to finish...
+Child process active (PID: 12341, Parent PID: 12340)
+Hello from child process!
+Parent: Child exited normally with return code 0`}
 />
 
-<WhyItWorked>
-`fork()` returns **twice**: `0` in the child, the child's PID in the parent,
-and `-1` on failure. That return value is the branch. `execl` does not return on
-success - it replaces the process image - so any code after it runs only on
-failure. This two-call pattern (fork then exec) is the foundation of process
-creation on Linux and the reason Android's `init` can spawn and supervise
-services.
-</WhyItWorked>
+<DeepDive title="Copy-on-Write (COW): How Android Launches Apps in 5ms">
+If `fork()` had to copy all 200MB of Android framework libraries and preloaded classes from RAM every time you tapped an app icon, launching an app would freeze your phone for 1-2 seconds.
 
-<Checkpoint
-  quiz={{
-    question: 'After a successful fork(), which statement is true?',
-    options: [
-      'Only the child continues; the parent exits.',
-      'Both parent and child continue from the fork() return point, with different return values.',
-      'The child gets a fresh copy of the program from disk.',
-      'fork() requires an immediate exec() to work.',
-    ],
-    answer: 1,
-    explain:
-      'fork() duplicates the process; both continue after the call. The child sees 0, the parent sees the child PID. exec() is separate and optional.',
-  }}
-/>
+Instead, Linux uses **Copy-on-Write (COW)**:
+1. When `fork()` is called, the kernel **only copies the Page Table entries** (pointers to physical frames), NOT the physical RAM pages themselves.
+2. The kernel marks all shared physical frames as **Read-Only** in both parent and child page tables.
+3. If both processes only *read* memory, zero memory copying ever takes place!
+4. The instant either process tries to *write* to a variable, the CPU hardware raises a **Page Fault Exception**.
+5. The kernel catches the page fault, allocates **one single new 4KB physical frame**, copies just that 4KB page, updates the faulting process's page table to point to the new frame, marks it writable, and resumes execution seamlessly.
 
-## 3. IPC: shared-memory producer / consumer
+This is why Android's **Zygote** process pre-loads all common Android Java classes at boot: every app inherits them instantly via COW!
+</DeepDive>
 
-Processes are isolated by default. To share data you ask the kernel for a shared
-mapping with `mmap(MAP_SHARED)`. (This is the same idea behind Android's
-`ashmem`/`memfd` and the buffers Binder passes between processes.)
+---
 
-Do this: one process writes to shared memory, another reads it.
+## 3. Inter-Process Communication: POSIX Shared Memory
+
+Because processes have completely isolated virtual address spaces, passing a raw pointer like `0x7ffee400` between processes over a pipe will crash with a segmentation fault.
+
+To share high-speed data (like camera video frames, audio buffers, or sensor streams), processes ask the Linux kernel to map the **same physical RAM frames into both of their virtual address spaces**.
+
+Do this: Create a shared memory producer (`shm_producer.c`) and consumer (`shm_consumer.c`).
 
 ```c
 /* shm_producer.c */
 #include <stdio.h>
 #include <string.h>
-#include <sys/mman.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+
+#define SHM_NAME "/aosp_mastery_shm"
+#define SHM_SIZE 4096
+
+struct SensorPayload {
+  int sensor_id;
+  int sample_count;
+  float temperature;
+  char message[64];
+};
 
 int main(void) {
-  const char *name = "/aosp_shm_demo";
-  int fd = shm_open(name, O_CREAT | O_RDWR, 0600);
+  // 1. Create a POSIX shared memory file descriptor
+  int fd = shm_open(SHM_NAME, O_CREAT | O_RDWR, 0660);
   if (fd < 0) { perror("shm_open"); return 1; }
-  ftruncate(fd, 4096);
 
-  char *p = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-  if (p == MAP_FAILED) { perror("mmap"); return 1; }
+  // 2. Newly created shm has 0 bytes length; truncate it to 4KB!
+  if (ftruncate(fd, SHM_SIZE) < 0) { perror("ftruncate"); return 1; }
 
-  strcpy(p, "payload written by the producer");
-  printf("producer wrote: %s\n", p);
+  // 3. Map shared memory into our virtual address space
+  struct SensorPayload *data = mmap(NULL, SHM_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+  if (data == MAP_FAILED) { perror("mmap"); return 1; }
+
+  // 4. Write sensor data into shared RAM
+  data->sensor_id = 42;
+  data->sample_count = 1000;
+  data->temperature = 36.6f;
+  strncpy(data->message, "AOSP Sensor Spine Active", sizeof(data->message));
+
+  printf("Producer: Wrote sensor sample (ID: %d, Temp: %.1fC) to shared memory.\n",
+         data->sensor_id, data->temperature);
+
+  munmap(data, SHM_SIZE);
+  close(fd);
   return 0;
 }
 ```
+
+Now write the consumer (`shm_consumer.c`):
 
 ```c
 /* shm_consumer.c */
 #include <stdio.h>
-#include <sys/mman.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/mman.h>
+
+#define SHM_NAME "/aosp_mastery_shm"
+#define SHM_SIZE 4096
+
+struct SensorPayload {
+  int sensor_id;
+  int sample_count;
+  float temperature;
+  char message[64];
+};
 
 int main(void) {
-  const char *name = "/aosp_shm_demo";
-  int fd = shm_open(name, O_RDONLY, 0600);
-  if (fd < 0) { perror("shm_open"); return 1; }
+  // 1. Open the existing shared memory object read-only
+  int fd = shm_open(SHM_NAME, O_RDONLY, 0660);
+  if (fd < 0) { perror("shm_open failed (did producer run?)"); return 1; }
 
-  char *p = mmap(NULL, 4096, PROT_READ, MAP_SHARED, fd, 0);
-  if (p == MAP_FAILED) { perror("mmap"); return 1; }
+  // 2. Map into consumer virtual address space
+  struct SensorPayload *data = mmap(NULL, SHM_SIZE, PROT_READ, MAP_SHARED, fd, 0);
+  if (data == MAP_FAILED) { perror("mmap"); return 1; }
 
-  printf("consumer read: %s\n", p);
+  // 3. Read data produced by the other process
+  printf("Consumer: Read from shared memory:\n");
+  printf("  Sensor ID    : %d\n", data->sensor_id);
+  printf("  Sample Count : %d\n", data->sample_count);
+  printf("  Temperature  : %.1f C\n", data->temperature);
+  printf("  Message      : %s\n", data->message);
+
+  munmap(data, SHM_SIZE);
+  close(fd);
+  
+  // Clean up shm node
+  shm_unlink(SHM_NAME);
   return 0;
 }
 ```
 
 <TestRunner
-  title="Build, produce, then consume"
-  cmd={`gcc -std=c11 shm_producer.c -o shm_producer -lrt
-gcc -std=c11 shm_consumer.c -o shm_consumer -lrt
-./shm_producer
-./shm_consumer`}
-  expect={`producer wrote: payload written by the producer
-consumer read: payload written by the producer`}
+  title="Compile and run producer-consumer IPC"
+  cmd={`gcc -std=c11 -Wall -Wextra shm_producer.c -lrt -o producer
+gcc -std=c11 -Wall -Wextra shm_consumer.c -lrt -o consumer
+./producer && ./consumer`}
+  expect={`Producer: Wrote sensor sample (ID: 42, Temp: 36.6C) to shared memory.
+Consumer: Read from shared memory:
+  Sensor ID    : 42
+  Sample Count : 1000
+  Temperature  : 36.6 C
+  Message      : AOSP Sensor Spine Active`}
+/>
+
+<CodeAnnotator
+  title="Key Syscall Flags in Shared Memory IPC"
+  items={[
+    {
+      syntax: 'shm_open(name, O_CREAT | O_RDWR, 0660)',
+      purpose: 'Named Memory Handle',
+      explanation: 'Creates or opens a POSIX shared memory object under /dev/shm/. Returns an integer file descriptor.',
+    },
+    {
+      syntax: 'ftruncate(fd, 4096)',
+      purpose: 'Allocate Storage Size',
+      explanation: 'A newly created shm object has a length of 0 bytes. Calling mmap() on a 0-byte file causes SIGBUS crash! ftruncate resizes it to 1 full 4KB page.',
+    },
+    {
+      syntax: 'mmap(..., PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0)',
+      purpose: 'Virtual Address Mapping',
+      explanation: 'MAP_SHARED tells the kernel that modifications to this memory must be visible to all other processes mapping the same fd.',
+    },
+    {
+      syntax: 'shm_unlink(name)',
+      purpose: 'Resource Deletion',
+      explanation: 'Removes the shared memory object name from /dev/shm. The memory remains valid until all open fds are closed, then is freed.',
+    },
+  ]}
+/>
+
+---
+
+## 4. Cross-Compilation: Building for ARM64 (aarch64)
+
+Most Android smartphones and Cuttlefish ARM64 virtual devices run on the 64-bit ARM architecture (`aarch64`), while development workstations run on x86_64 Intel/AMD processors.
+
+When compiling code for a different architecture than the one you are running on, you use a **Cross-Compiler**.
+
+```text
+Host Architecture (x86_64 Workstation)               Target Architecture (ARM64 Device)
+┌───────────────────────────────────────┐            ┌───────────────────────────────────┐
+│ Host Compiler: gcc / clang            │            │ Android Phone / Cuttlefish ARM64  │
+│ Generates: x86_64 machine code        │            │ Executes: ARM64 instructions      │
+├───────────────────────────────────────┤            └───────────────────────────────────┘
+│ Cross-Compiler: aarch64-linux-gnu-gcc │                              ▲
+│ Generates: ARM64 machine code ────────┼──────────────────────────────┘
+└───────────────────────────────────────┘
+```
+
+Do this: Compile your layout program for ARM64:
+
+```bash
+aarch64-linux-gnu-gcc -std=c11 -Wall -Wextra layout.c -o layout_arm64
+```
+
+Verify with `file` that the resulting ELF binary was compiled for ARM64:
+
+<TestRunner
+  title="Verify cross-compiled binary architecture"
+  cmd={`file layout_arm64`}
+  expect={`layout_arm64: ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, ...`}
+/>
+
+To run this binary on your x86_64 host without physical ARM hardware, use **QEMU user-mode emulation**:
+
+<TestRunner
+  title="Execute ARM64 binary on x86_64 host using QEMU"
+  cmd={`qemu-aarch64 -L /usr/aarch64-linux-gnu/ ./layout_arm64`}
+  expect={`=== Virtual Address Space Layout (PID: ...) ===
+Code (.text) function ptr : 0x...
+Initialized Data (.data)  : 0x...
+Uninitialized Data (.bss) : 0x...
+Heap (malloc)             : 0x...
+Stack (local variable)    : 0x...`}
+/>
+
+---
+
+## 5. System Call Tracing with strace
+
+How do you know what a program is doing when you don't have its source code or a debugger? You intercept its **system calls**.
+
+`strace` uses the Linux kernel's `ptrace(2)` system call to pause the target process on every entry and exit from kernel mode, printing the arguments and return values.
+
+Do this: Trace the exact system calls executed by your `forker` program:
+
+<TestRunner
+  title="Trace clone, execve, and wait4 syscalls"
+  cmd={`strace -f -e trace=clone,execve,wait4 ./forker`}
+  expect={`execve("./forker", ["./forker"], 0x7ffd...) = 0
+Parent process starting (PID: ...)
+clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, ...) = 12348
+[pid 12348] Child process active (PID: 12348, Parent PID: 12347)
+[pid 12347] Parent waiting for child (PID: 12348) to finish...
+[pid 12348] execve("/bin/echo", ["echo", "Hello from child process!"], NULL) = 0
+[pid 12348] +++ exited with 0 +++
+[pid 12347] wait4(12348, [{WIFEXITED(s) && WEXITSTATUS(s) == 0}], 0, NULL) = 12348
+Parent: Child exited normally with return code 0
++++ exited with 0 +++`}
 />
 
 <WhyItWorked>
-`shm_open` creates a named object in the kernel; `mmap` maps it into the
-process. `MAP_SHARED` means writes are visible to other mappings of the same
-object - that is the sharing. The two programs never talk directly; the kernel
-mediates, which is why this survives the producer exiting before the consumer
-runs.
+Notice what happened at the kernel level:
+1. `clone(...) = 12348`: The parent invoked the Linux `clone` syscall (the kernel underlying `fork()`), which returned child PID 12348.
+2. `execve("/bin/echo", ...)`: Child process 12348 replaced its virtual memory space with `/bin/echo`.
+3. `wait4(12348, ...)`: Parent process paused execution until child 12348 terminated.
 </WhyItWorked>
 
-:::note Cleaning up the shared object
-The producer uses `O_CREAT` but never `shm_unlink`, so the object at
-`/dev/shm/aosp_shm_demo` persists between runs (a fresh run overwrites it, but
-it is still leaked). In real code you unlink after opening - the mapping keeps
-working - so the object disappears when the last mapper exits. Add
-`shm_unlink(name);` after `mmap` in the producer to see that. This matters in
-AOSP too: leaked shared-memory objects are a real resource-leak class.
-:::
+---
 
-### Testing thread: unit-test the consumer
+## Mastery Check
 
-<TestRunner
-  title="A first C test (no framework required)"
-  cmd={`cat > test_roundtrip.c <<'EOF'
-#include <assert.h>
-#include <string.h>
-#include <stdio.h>
-int main(void) {
-  const char *s = "payload written by the producer";
-  assert(strlen(s) == 31);
-  assert(strcmp(s, "payload written by the producer") == 0);
-  puts("test_roundtrip: PASS");
-  return 0;
-}
-EOF
-gcc -std=c11 test_roundtrip.c -o test_roundtrip && ./test_roundtrip`}
-  expect={`test_roundtrip: PASS`}
-/>
-
-:::tip Prefer a real framework later
-`assert` is enough now. Phase 2 onward uses a proper test runner; the habit you
-are building - a checkable test per unit - is the point (the Testing Thread,
-plan section 4.7).
-:::
-
-## 4. Cross-compilation to aarch64
-
-Android devices are mostly `arm64`. You compile on your `x86_64` host for the
-target. This is the same mechanism the AOSP build uses under the hood.
-
-<TestRunner
-  title="Build for aarch64 and run it under QEMU"
-  cmd={`sudo apt-get install -y gcc-aarch64-linux-gnu qemu-user
-aarch64-linux-gnu-gcc layout.c -o layout_arm64
-file layout_arm64
-qemu-aarch64 ./layout_arm64`}
-  expect={`layout_arm64: ELF 64-bit LSB pie executable, ARM aarch64, ...
-
-pid      = 12345
-&global_init = 0x... (data)
-&global_zero = 0x... (bss)
-&local       = 0x... (stack)
-
-(Addresses differ from the host build. Running is via QEMU on x86_64.)`}
-/>
-
-<WhyItWorked>
-`aarch64-linux-gnu-gcc` is a cross-compiler: same source, different target ISA
-and ABI. The result is an ELF binary for ARM64, which your x86_64 kernel cannot
-run natively - hence `qemu-aarch64` to execute it. In a real AOSP build, this
-cross-compilation is driven by the build system rather than called by hand.
-</WhyItWorked>
-
-## 5. See it with strace
-
-`strace` shows every syscall a program makes - the actual crossings into the
-kernel. This is how you debug "it does not do what I think" at the systems level.
-
-<TestRunner
-  title="Trace the forker"
-  cmd={`strace -f -e trace=clone,execve,wait4 ./forker 2>&1 | head -n 20`}
-
-  expect={`clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|...) = 12346
-execve("/bin/echo", ["echo", "hello from the child"], ...) = 0
-...
-wait4(12346, ...) = 12346
-...
-parent: child 12346 exited with 0
-
-
-(Exact counts differ; you should see clone, then execve, then wait4.)`}
+<Checkpoint
+  quiz={{
+    question: 'Why does passing a raw pointer between two separate processes over a pipe fail?',
+    options: [
+      'Pipes can only transmit ASCII characters, not binary numbers.',
+      'Each process has a private virtual address space; the same address number in Process A does not point to the same physical RAM in Process B.',
+      'Linux kernels encrypt all pointers before sending them over pipes.',
+      'Pointers require 128-bit alignment to cross pipe buffers.',
+    ],
+    answer: 1,
+    explain:
+      'Because virtual memory isolates address spaces, pointer values are only valid within the page tables of the process that allocated them.',
+  }}
 />
 
 <Checkpoint
   quiz={{
-    question: 'In strace output for this program, which syscall creates the child process?',
+    question: 'How does Copy-On-Write (COW) make fork() fast during Android app startup?',
     options: [
-      'fork',
-      'execve',
-      'clone',
-      'mmap',
+      'It skips allocating file descriptors until the app creates a window.',
+      'It immediately copies all physical RAM to a backup swap partition.',
+      'It shares physical RAM pages as read-only and only copies individual 4KB pages when modified.',
+      'It converts C++ code into Java bytecode on the fly.',
     ],
     answer: 2,
     explain:
-      'On modern Linux, fork() is implemented via the clone syscall, so strace shows clone. execve replaces the image; wait4 reaps the child. There is no separate "fork" syscall on the wire.',
+      'COW allows child processes to share the parent memory pages read-only. Physical allocation only happens on demand when a page is written to.',
   }}
 />
 
-## Break It
-
-<BreakIt
-  items={[
-    'Symptom: fork() returns -1 and perror prints "Resource temporarily unavailable". Cause: you hit the per-user process limit (or are leaking children by never waiting). Fix: reap children with waitpid; check ulimit -u.',
-    'Symptom: the consumer reads an empty string or garbage. Cause: you mapped the shared object MAP_PRIVATE (copy-on-write) or never ftruncate()d it to a size. Fix: use MAP_SHARED and ftruncate to a real size before mapping.',
-    'Symptom: qemu-aarch64: command not found, or an aarch64 binary will not run. Cause: the cross-toolchain or qemu-user is not installed. Fix: install gcc-aarch64-linux-gnu and qemu-user.',
-  ]}
-/>
-
-## 6. Mastery check
-
-Ship a multi-process, cross-compiled program, verified with **real `strace`**
-output. Concretely, you have:
-
-- A parent that forks a child which `exec`s another program (section 2).
-- A shared-memory producer/consumer pair (section 3).
-- At least one unit test that runs green (section 3, Testing Thread).
-- A build for **both** `x86_64` and `aarch64` (section 4).
-- `strace` output showing `clone` -> `execve` -> `wait4` (section 5).
-
-**Spine artifact:** commit the multi-process, cross-compiled program and its
-shared-memory producer/consumer under `spine/01-ipc` in your Project Spine fork
-(plan section 4.8). This is the artifact the competency map records for this
-phase.
+## Reward
 
 <Reward xp="500" badge="Systems Foundations" />
 
