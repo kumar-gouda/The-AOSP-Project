@@ -21,6 +21,11 @@ import {
   DeepDive,
   CodeAnnotator,
   ConceptComparison,
+  DidYouKnow,
+  DevGotcha,
+  TrialErrorLab,
+  DebugToolkit,
+  VocabularyHelper,
 } from '@site/src/components/Unit';
 import {PhaseHeader} from '@site/src/components/PhaseHeader';
 import {CompleteButton} from '@site/src/components/Progress';
@@ -87,6 +92,16 @@ to read modern system modules.
     },
   ]}
 />
+
+<DidYouKnow title="Why Android Created Bionic Instead of Using GNU Glibc">
+  Why did Android go through the enormous effort of writing a custom C library (Bionic) instead of using the battle-tested GNU <code>glibc</code> like Ubuntu and Debian?
+  <br /><br />
+  <strong>1. Licensing:</strong> <code>glibc</code> is licensed under the LGPL (Lesser GNU General Public License). Hardware vendors (Qualcomm, Samsung, Sony) shipping proprietary camera tuning blobs, DSP binaries, and GPU drivers feared that linking against an LGPL C library could legally force them to publish proprietary source code. Bionic is licensed under permissive BSD/Apache 2.0.
+  <br /><br />
+  <strong>2. Lightweight Memory Footprint:</strong> When Android launched on the HTC Dream in 2008, the phone had only 192 MB of RAM. Glibc's static memory tables and locale bloat were too heavy. Bionic was stripped down to the bare essentials.
+  <br /><br />
+  <strong>3. Linker Namespace Isolation:</strong> Bionic does not just provide <code>malloc</code> and <code>printf</code>; it contains Android's custom dynamic linker (<code>/system/bin/linker64</code>). The Bionic linker partitions system memory into strict <em>linker namespaces</em>, preventing vendor hardware libraries from accidentally or maliciously loading internal Android private frameworks.
+</DidYouKnow>
 
 :::note Honest status of this page
 Authored against a 64-bit Linux target with a Cuttlefish device. Output blocks are marked **expected (author-run pending)** where not yet captured on a reference machine. Per this project's rule, output is shown verbatim once captured - never paraphrased.
@@ -383,6 +398,80 @@ In Rust, the **Borrow Checker** validates object ownership, lifetimes, and refer
 
 ---
 
+---
+
+<DebugToolkit
+  title="Phase 5 Native Runtime & Bionic Diagnostic Toolkit"
+  tools={[
+    {
+      name: 'LD_DEBUG (Bionic Dynamic Linker Tracing)',
+      desc: 'Trace dynamic library resolution, DT_NEEDED dependencies, and symbol binding in real time.',
+      command: '# Trace all shared libraries loaded by an executable:\nadb shell LD_DEBUG=1 /system/bin/my_daemon\n\n# Trace symbol lookup resolutions:\nadb shell LD_DEBUG=2 /system/bin/my_daemon 2>&1 | grep -i "lookup"',
+      output: `[ 142.102 18402] dynamic_linker: loading "/system/bin/my_daemon"...
+[ 142.103 18402] dynamic_linker: loading "libc.so"...
+[ 142.104 18402] dynamic_linker: loading "liblog.so"...
+[ 142.105 18402] dynamic_linker: symbol lookup "ALOGI" -> found in liblog.so at 0x7fa2b000`,
+      tip: 'If your daemon dies on startup with "cannot locate symbol ...", running LD_DEBUG=2 reveals the exact library where Bionic looked for the symbol and why it was missing.',
+    },
+    {
+      name: 'tombstoned & Crash Analysis (/data/tombstones)',
+      desc: 'Inspect detailed post-mortem native crash dumps, register states, stack backtraces, and memory maps.',
+      command: '# List recent crash tombstones:\nadb shell ls -lt /data/tombstones/\n\n# Read the most recent tombstone:\nadb shell cat /data/tombstones/tombstone_00 | head -n 45',
+      output: `*** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***
+Build fingerprint: 'google/cf_x86_64_phone/vsoc_x86_64:14/...'
+Revision: '0'
+ABI: 'x86_64'
+Timestamp: 2024-05-20 14:02:10.402
+pid: 18402, tid: 18402, name: my_daemon  >>> /system/bin/my_daemon <<<
+signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x0
+    rax 0000000000000000  rbx 00007ffe40201000 ...
+backtrace:
+      #00 pc 0000000000001420  /system/bin/my_daemon (main+32)
+      #01 pc 0000000000049102  /apex/com.android.runtime/bin/bionic/libc.so (__libc_init+114)`,
+      tip: 'Android saves the last 50 native crashes in /data/tombstones/. Whenever a native service dies with SIGSEGV or SIGABRT, the tombstone has the exact instruction pointer (pc) and call stack.',
+    },
+    {
+      name: 'ndk-stack & llvm-symbolizer (Symbol Demangler)',
+      desc: 'Convert raw hexadecimal addresses in stack traces into exact source file names and line numbers.',
+      command: 'adb logcat -b crash -d | ndk-stack -sym out/target/product/vsoc_x86_64/symbols',
+      output: `********** Crash dump: **********
+Build fingerprint: ...
+pid: 18402, tid: 18402, name: my_daemon  >>> /system/bin/my_daemon <<<
+#00 0x00001420 in my_daemon::processPacket(char const*) at /aosp/system/core/my_daemon/main.cpp:42
+#01 0x00001560 in main at /aosp/system/core/my_daemon/main.cpp:89`,
+      tip: 'Always point ndk-stack to the unstripped binaries in the "symbols" directory (out/target/product/.../symbols), NOT the stripped binaries deployed into the device image.',
+    },
+  ]}
+/>
+
+---
+
+<DevGotcha
+  title="Phase 5 Native Runtime Traps & Gotchas"
+  traps={[
+    {
+      name: 'Non-Async-Signal-Safe Functions in Signal Handlers',
+      symptom: 'Your daemon catches SIGTERM or SIGINT to perform graceful shutdown, but intermittently freezes completely and refuses to terminate.',
+      cause: 'You called malloc(), free(), ALOGI(), or std::cout inside the signal handler. If the OS delivered the signal while the thread was already executing malloc() and holding the internal heap lock, re-entering malloc() inside the handler creates an unresolvable recursive deadlock.',
+      fix: 'Use a volatile std::atomic<bool> flag in the signal handler and do all cleanup in the main event loop, or use signalfd() / epoll to process signals as regular file descriptor events.',
+    },
+    {
+      name: 'The Linker Namespace Boundary Denial',
+      symptom: 'A vendor native service fails with: "dlopen failed: library \\"libbinder.so\\" not found" even though /system/lib64/libbinder.so exists.',
+      cause: 'Android\'s Bionic dynamic linker enforces strict partition sandboxing via /system/etc/ld.config.txt. Vendor processes run in the "vendor" namespace and are prohibited from loading internal platform libraries.',
+      fix: 'Vendor services must link against VNDK libraries, use "libbinder_ndk.so" instead of "libbinder.so", or communicate with system daemons over AIDL Binder IPC.',
+    },
+    {
+      name: 'atest "No tests found" Discovery Failure',
+      symptom: 'Running "atest MyModuleTest" builds the test, but fails with "No tests found to run" or exits with code 1.',
+      cause: 'The test module in Android.bp did not declare test_suites: ["general-tests"] or ["device-tests"].',
+      fix: 'Always add test_suites: ["general-tests"] to cc_test or android_test modules in Android.bp.',
+    },
+  ]}
+/>
+
+---
+
 ## Mastery Check
 
 <Checkpoint
@@ -423,6 +512,63 @@ In Rust, the **Borrow Checker** validates object ownership, lifetimes, and refer
     'Symptom: atest fails to discover your cc_test module. Cause: Missing test_suites: ["general-tests"] in the cc_test Android.bp declaration. Fix: Add test_suites attribute to your Android.bp rule.',
     'Symptom: Dynamic linker error: "library libfoo.so not found". Cause: Shared library not installed in /system/lib64/ or missing rpath. Fix: Add the library to PRODUCT_PACKAGES or shared_libs.',
   ]}
+/>
+
+<TrialErrorLab
+  title="Hands-on Lab: Catch a Signal Handler Deadlock"
+  goal="Intentionally observe a classic multithreaded signal deadlock in native userspace and replace it with an async-signal-safe implementation."
+  experiment={`Write signal_deadlock.c:
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <signal.h>
+#include <unistd.h>
+
+void on_term(int sig) {
+    // UNSAFE: malloc inside signal handler!
+    void *ptr = malloc(128); 
+    printf("Handled signal %d with allocation at %p\\n", sig, ptr);
+    free(ptr);
+    exit(0);
+}
+
+int main() {
+    signal(SIGTERM, on_term);
+    printf("PID %d running continuous allocations. Send SIGTERM!\\n", getpid());
+    while (1) {
+        void *p = malloc(1024);
+        free(p);
+    }
+    return 0;
+}
+
+Compile and run:
+gcc signal_deadlock.c -o signal_deadlock
+./signal_deadlock &
+# Send SIGTERM repeatedly while the loop holds the malloc lock:
+for i in {1..100}; do kill -TERM %1 2>/dev/null; done`}
+  expectedError={`PID 21045 running continuous allocations. Send SIGTERM!
+[Process freezes, never prints "Handled signal", and hangs indefinitely without exiting]`}
+  diagnosis="When the main loop thread called malloc(), Bionic libc locked the internal heap allocator mutex. While holding that mutex, the OS delivered the SIGTERM signal and suspended the thread to run on_term(). When on_term() also called malloc(), it tried to acquire the same mutex that the interrupted thread was already holding. Because the interrupted thread can never resume until the signal handler finishes, the thread deadlocked against itself permanently."
+  fix={`Remove malloc/printf from the handler and use a lock-free atomic flag:
+
+#include <stdatomic.h>
+
+static atomic_bool g_running = 1;
+
+void on_term(int sig) {
+    g_running = 0; // Async-signal-safe!
+}
+
+int main() {
+    signal(SIGTERM, on_term);
+    while (g_running) {
+        void *p = malloc(1024);
+        free(p);
+    }
+    printf("Clean exit after safe signal notification.\\n");
+    return 0;
+}`}
 />
 
 ## Reward

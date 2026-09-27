@@ -21,6 +21,11 @@ import {
   DeepDive,
   CodeAnnotator,
   ConceptComparison,
+  DidYouKnow,
+  DevGotcha,
+  TrialErrorLab,
+  DebugToolkit,
+  VocabularyHelper,
 } from '@site/src/components/Unit';
 import {PhaseHeader} from '@site/src/components/PhaseHeader';
 import {CompleteButton} from '@site/src/components/Progress';
@@ -101,6 +106,19 @@ If you are new to Android platform engineering, Treble and HAL architecture intr
     },
   ]}
 />
+
+<DidYouKnow title="Why Android Killed HIDL and Replaced It with AIDL">
+  When Project Treble debuted in Android 8.0, Google introduced <strong>HIDL</strong> (HAL Interface Definition Language), a dedicated Binder driver (<code>/dev/hwbinder</code>), and a separate registry daemon (<code>hwservicemanager</code>).
+  <br /><br />
+  <strong>The Developer Nightmare:</strong> For four Android releases, engineers had to write and maintain two completely different IPC stacks:
+  <ul>
+    <li>Standard AIDL / <code>/dev/binder</code> for Java framework and system daemons.</li>
+    <li>HIDL / <code>/dev/hwbinder</code> for vendor HALs, which required arcane C++ data structures (like <code>hidl_string</code>, <code>hidl_vec</code>, and manual passthrough wrappers).</li>
+  </ul>
+  This split duplicated IPC infrastructure, consumed extra memory, and confused platform developers.
+  <br /><br />
+  <strong>The Great Unification (Android 11+):</strong> Google created <strong>Stable AIDL</strong> (using the <code>@VintfStability</code> annotation) and engineered <code>libbinder_ndk</code>. This allowed standard AIDL to be compiled with version hashes and frozen ABIs. With this innovation, HIDL was completely deprecated and all system services and HALs now communicate over a single unified Binder!
+</DidYouKnow>
 
 ---
 
@@ -562,6 +580,66 @@ All tests passed!`}
 
 ---
 
+<DebugToolkit
+  title="Phase 6 HAL & AIDL Diagnostic Toolkit"
+  tools={[
+    {
+      name: 'service list & cmd (Binder Lookup)',
+      desc: 'Verify if your HAL registered with servicemanager and query available RPC methods.',
+      command: '# Check if your HAL is registered:\nadb shell service list | grep -i "android.hardware.foo"\n\n# Or check vendor servicemanager specifically:\nadb shell lshal | grep -i "foo"',
+      output: `142	android.hardware.foo.IFoo/default: [android.hardware.foo.IFoo]
+[INFO] Service registered with pid 18402 (u:r:hal_foo_default:s0)`,
+      tip: 'If service list does not show your HAL, check logcat for "servicemanager: Could not find ... in sepolicy" or verify that your init.rc actually started the daemon.',
+    },
+    {
+      name: 'service call (Direct Command-Line IPC Invocation)',
+      desc: 'Execute remote procedure calls across Binder directly from an adb root shell without writing a client program.',
+      command: '# Call method 1 (getHello) with no arguments:\nadb shell service call android.hardware.foo.IFoo/default 1\n\n# Call method 2 with integer argument 42:\nadb shell service call android.hardware.foo.IFoo/default 2 i32 42',
+      output: `Result: Parcel(
+  0x00000000: 00000000 0000000e 00650048 006c006c '........H.e.l.l.'
+  0x00000010: 0020006f 004f0041 00500053 00000021 'o. .A.O.S.P.!...')`,
+      tip: 'The integer "1" corresponds to the first method declared in the .aidl interface (TRANSACTION_getHello = IBinder::FIRST_CALL_TRANSACTION + 0).',
+    },
+    {
+      name: 'dumpsys binder_calls_stats (IPC Performance Profiling)',
+      desc: 'Trace CPU latency, call volume, and parcel sizes for every Binder transaction in the system.',
+      command: 'adb shell dumpsys binder_calls_stats --dump-cpu | grep -A 5 "android.hardware.foo"',
+      output: `Class: android.hardware.foo.IFoo
+  Method: getSensorData, calls: 120, avg_latency: 0.42ms, max_latency: 1.82ms
+  Avg payload size: 64 bytes`,
+      tip: 'Use binder_calls_stats to detect chatty HALs that make excessive Binder roundtrips inside the render loop.',
+    },
+  ]}
+/>
+
+---
+
+<DevGotcha
+  title="Phase 6 HAL & Treble Traps & Gotchas"
+  traps={[
+    {
+      name: 'The @VintfStability Unfrozen API Hash Mismatch',
+      symptom: 'Build fails with: "error: interface ... has been modified without freezing the API or updating .api/ directory".',
+      cause: 'AIDL HAL interfaces are strictly versioned. When you modify an existing interface or add a method, Soong checks the interface syntax against the cryptographic SHA hash in hardware/interfaces/.../.api/.',
+      fix: 'Run "m <interface_module_name>-update-api" to update the current hash, or "m <interface_module_name>-freeze-api" when creating a new production release.',
+    },
+    {
+      name: 'The VINTF Manifest Mismatch Trap',
+      symptom: 'AServiceManager_waitForService() returns nullptr and VTS tests fail with "checkCompatibility: VINTF manifest mismatch".',
+      cause: 'The HAL service runs, but /vendor/etc/vintf/manifest.xml is missing the <hal format="aidl"> declaration matching the exact package name, interface name, and instance.',
+      fix: 'Add the complete <hal format="aidl"> stanza with <fqname>IFoo/default</fqname> to your device\'s manifest.xml.',
+    },
+    {
+      name: 'Registration Instance Name Mismatch',
+      symptom: 'Service registers successfully, but client calls hang forever on waitForService("default").',
+      cause: 'The C++ HAL registered as "IFoo/default" or "foo", but AIDL clients expect the fully qualified instance name: "android.hardware.foo.IFoo/default".',
+      fix: 'Always use the auto-generated helper: std::string name = std::string(IFoo::descriptor) + "/default"; AServiceManager_addService(service->asBinder().get(), name.c_str());',
+    },
+  ]}
+/>
+
+---
+
 ## Checkpoint
 
 <Checkpoint
@@ -589,6 +667,34 @@ All tests passed!`}
     'Symptom: Soong build error: "Interface android.hardware.foo is marked @VintfStability but versions_with_info has no frozen versions". Cause: You added @VintfStability but did not freeze the interface hash. Fix: Run m <interface_name>-freeze-api to generate the hash file in the .api/ directory.',
     'Symptom: VTS test fails with checkCompatibility: VINTF manifest mismatch. Cause: The instance name or interface version in /vendor/etc/vintf/manifest.xml does not match what the test requested. Fix: Ensure the <fqname> in manifest.xml matches IFoo/default.',
   ]}
+/>
+
+<TrialErrorLab
+  title="Hands-on Lab: Catch and Fix an AIDL Unfrozen API Hash Mismatch"
+  goal="Intentionally modify a stable AIDL interface, observe the exact cryptographic hash verification failure, and update the API definition."
+  experiment={`Add a new method into your @VintfStability AIDL file:
+
+// In IFoo.aidl:
+package android.hardware.foo;
+
+@VintfStability
+interface IFoo {
+    int getVersion();
+    String getHello();
+    void newExperimentalMethod(); // Added without updating hash!
+}
+
+Build the interface:
+m android.hardware.foo-V1-ndk`}
+  expectedError={`FAILED: out/soong/.intermediates/hardware/interfaces/foo/aidl/android.hardware.foo-V1-ndk-source/gen/interfaces.hash
+error: interface android.hardware.foo.IFoo has been modified without freezing the API.
+Please run:
+$ m android.hardware.foo-update-api`}
+  diagnosis="Android's build system calculates a SHA-256 hash of the AIDL interface syntax and compares it against the stored hash in the .api/ directory. This ensures that no engineer can accidentally alter an interface signature without consciously updating the API contract, preventing vendor binary incompatibility."
+  fix={`Run the command instructed by the compiler:
+m android.hardware.foo-update-api
+
+This updates the hashes in .api/1/ and .api/current/ to match your new method.`}
 />
 
 ---

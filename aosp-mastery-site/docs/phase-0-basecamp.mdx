@@ -19,6 +19,11 @@ import {
   KeywordSpotlight,
   DeepDive,
   ConceptComparison,
+  DidYouKnow,
+  DevGotcha,
+  TrialErrorLab,
+  DebugToolkit,
+  VocabularyHelper,
 } from '@site/src/components/Unit';
 import {PhaseHeader} from '@site/src/components/PhaseHeader';
 import {CompleteButton} from '@site/src/components/Progress';
@@ -102,6 +107,16 @@ Before downloading hundreds of gigabytes of source code, familiarize yourself wi
     },
   ]}
 />
+
+<DidYouKnow title="Why Google Built 'repo' Instead of Using Git Submodules">
+  In 2008, when Google open-sourced Android, Git submodules were primitive and recorded hard-coded commit SHAs inside a parent repository.
+  <br /><br />
+  <strong>The Problem:</strong> AOSP is not one giant repository (monorepo); it is over <strong>1,000 independent Git repositories</strong> (Linux kernel forks, hardware HALs, Bionic libc, ART runtime, frameworks). Updating a single milestone branch using Git submodules would have required making 1,000 individual commits in a parent repo just to update the commit hashes!
+  <br /><br />
+  <strong>The Solution:</strong> Google wrote <code>repo</code> in Python. Instead of nested submodules, <code>repo</code> reads a single XML manifest (<code>default.xml</code>). When Google wants to tag or branch all 1,000 repositories, they change just one XML file.
+  <br /><br />
+  <strong>Pro-tip:</strong> When syncing on unstable or slow internet connections, always pass <code>--no-clone-bundle</code>. By default, repo tries to download pre-packaged tarballs from Google Cloud Storage, which frequently times out or disconnects on strict corporate and university networks.
+</DidYouKnow>
 
 ---
 
@@ -312,6 +327,81 @@ aosp/
 
 ---
 
+<DebugToolkit
+  title="Phase 0 Workstation & Tooling Diagnostic Toolkit"
+  tools={[
+    {
+      name: 'kvm-ok & /dev/kvm Verification',
+      desc: 'Verify that CPU hardware virtualization (Intel VT-x / AMD-V) is enabled in BIOS and that your user has access to /dev/kvm.',
+      command: 'kvm-ok\nls -l /dev/kvm\ngroups $USER',
+      output: `INFO: /dev/kvm exists
+KVM acceleration can be used
+crw-rw----+ 1 root kvm 10, 232 Jan 15 10:00 /dev/kvm
+user : user adm sudo dip plugdev kvm cvdnetwork render`,
+      tip: 'If groups $USER shows kvm, but launch_cvd still says Permission denied, run "newgrp kvm" in your current terminal to apply the group without logging out.',
+    },
+    {
+      name: 'repo Multi-Tree Health Check',
+      desc: 'Quickly find which of the 1,000 repositories have unstaged changes, dirty commits, or detached HEAD states.',
+      command: 'repo status\n# Or run a rapid git status across every single repository in parallel:\nrepo forall -p -c "git status -s"',
+      output: `project frameworks/base/                    branch my-feature-branch
+ -m     core/java/android/os/Binder.java
+project system/core/
+ --     (no branch, on tag android-14.0.0_r50)`,
+      tip: 'Never run "git pull" manually inside an AOSP directory. Always use "repo sync -c -j$(nproc)" to keep all 1,000 repositories synchronized to the project manifest.',
+    },
+    {
+      name: 'Host RAM, Swap & File System Health',
+      desc: 'Check available RAM, swap space, and ensure your build drive is an uncompressed ext4/xfs filesystem.',
+      command: 'free -h\nswapon --show\ndf -hT ~/aosp',
+      output: `               total        used        free      shared  buff/cache   available
+Mem:            62Gi       8.2Gi        41Gi       1.2Gi        13Gi        52Gi
+Swap:           32Gi          0B        32Gi
+Filesystem     Type   Size  Used Avail Use% Mounted on
+/dev/nvme0n1p2 ext4  1.8Ti 450Gi 1.3Ti  26% /home/developer`,
+      tip: 'AOSP requires a case-sensitive Linux filesystem (ext4 or xfs). Never build AOSP on an NTFS or exFAT external drive—the build system will fail because Android has filenames that differ only by case (like xt_CONNMARK.h vs xt_connmark.h).',
+    },
+    {
+      name: 'Cuttlefish CVD Process & Log Status',
+      desc: 'Inspect the status of a running virtual device and tail the guest Linux kernel boot log.',
+      command: 'cvd status\ntail -n 50 /tmp/cf_avd_*/logs/kernel.log',
+      output: `[INFO] cvd process is running: instance 1, pid 14829
+[INFO] WebRTC browser interface available at https://localhost:8443
+[    2.104921] init: init first stage started!
+[    2.310491] init: [libfs_mgr]Mounted /system partition successfully`,
+      tip: 'If Cuttlefish fails to boot, the first place to look is always /tmp/cf_avd_1/logs/kernel.log. If it panicked before init started, the issue is almost always guest kernel command-line args or missing host KVM support.',
+    },
+  ]}
+/>
+
+---
+
+<DevGotcha
+  title="Phase 0 Workstation Traps & Silent Failures"
+  traps={[
+    {
+      name: 'The Missing Group Logout Trap (/dev/kvm)',
+      symptom: 'launch_cvd crashes immediately with: "crosvm: failed to open /dev/kvm: Permission denied (os error 13)".',
+      cause: 'You ran "sudo usermod -aG kvm $USER", but in Linux, group membership updates do NOT take effect in existing terminal sessions or desktop logins until you log out or spawn a new session.',
+      fix: 'Run "newgrp kvm" in your terminal, or log out completely and log back into your Ubuntu desktop.',
+    },
+    {
+      name: 'The 32 GB OOM Linker Kill',
+      symptom: 'After building for 2 hours, the build abruptly fails with "clang++: error: unable to execute command: Killed" or exit code 137.',
+      cause: 'When linking huge libraries like libandroid_runtime.so or libart.so, Clang LLD can consume over 16-24 GB of RAM for a single link step. If you pass -j16 on a 32 GB machine, multiple linkers run simultaneously and the Linux Out-Of-Memory (OOM) killer kills them.',
+      fix: 'Create a 32 GB swapfile: "sudo fallocate -l 32G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile". Or throttle parallelism during linking with "m -j4".',
+    },
+    {
+      name: 'The CoW (Btrfs / ZFS) Build Slowdown Trap',
+      symptom: 'AOSP builds take 6 to 8 hours on a fast NVMe SSD instead of 1.5 hours.',
+      cause: 'Filesystems with Copy-on-Write (Btrfs, ZFS) fragment heavily when Soong/Ninja create, overwrite, and link thousands of object files, causing severe I/O thrashing.',
+      fix: 'Use ext4 or XFS for your AOSP partition. If you must use Btrfs, disable CoW on the build directory using "chattr +C ~/aosp/out" before building.',
+    },
+  ]}
+/>
+
+---
+
 ## Break It
 
 <BreakIt
@@ -320,6 +410,36 @@ aosp/
     'Symptom: launch_cvd fails with "crosvm: failed to open /dev/kvm: Permission denied". Cause: Your user account was not added to the kvm group or you forgot to reboot. Fix: Run sudo usermod -aG kvm $USER and reboot.',
     'Symptom: Build fails with "Killed" or Out-Of-Memory errors after several hours. Cause: Insufficient combined RAM and swap space during heavy linking phases. Fix: Configure at least 32 GB of swap space (sudo fallocate -l 32G /swapfile) or lower build parallelism using m -j4.',
   ]}
+/>
+
+<TrialErrorLab
+  title="Hands-on Lab: Diagnose & Fix KVM Permission Denied"
+  goal="Intentionally observe what happens when KVM permissions are missing, inspect the exact error code, and resolve it without rebooting."
+  experiment={`Simulate missing KVM group access by launching a KVM probe with standard unprivileged credentials:
+
+python3 -c '
+import os, sys
+try:
+    fd = os.open("/dev/kvm", os.O_RDWR)
+    print("SUCCESS: /dev/kvm opened successfully!")
+    os.close(fd)
+except PermissionError as e:
+    print(f"FAILED as expected: {e} (errno: {e.errno})", file=sys.stderr)
+'
+
+If your user already has permissions, test what happens when permissions are revoked:
+ls -l /dev/kvm`}
+  expectedError={`FAILED as expected: [Errno 13] Permission denied: '/dev/kvm' (errno: 13)`}
+  diagnosis="In Linux, /dev/kvm is owned by root:kvm with mode 0660 (crw-rw----). Any process not running as root or without the kvm group ID in its supplementary credentials list will be rejected by the Linux kernel VFS with errno 13 (EACCES / Permission denied)."
+  fix={`1. Add your user to the kvm, cvdnetwork, and render groups:
+sudo usermod -aG kvm,cvdnetwork,render $USER
+
+2. Activate the group immediately in your active shell without logging out:
+newgrp kvm
+
+3. Verify:
+groups
+# kvm should now appear in the active shell groups output!`}
 />
 
 ---

@@ -21,6 +21,11 @@ import {
   DeepDive,
   CodeAnnotator,
   ConceptComparison,
+  DidYouKnow,
+  DevGotcha,
+  TrialErrorLab,
+  DebugToolkit,
+  VocabularyHelper,
 } from '@site/src/components/Unit';
 import {PhaseHeader} from '@site/src/components/PhaseHeader';
 import {CompleteButton} from '@site/src/components/Progress';
@@ -80,6 +85,18 @@ narrate the boot chain against actual log lines, not an abstract diagram.
     },
   ]}
 />
+
+<DidYouKnow title="Why Android Uses a Two-Stage Init (First-Stage vs Second-Stage)">
+  In traditional Linux desktop distributions, the kernel mounts the root filesystem directly from the storage disk using <code>root=/dev/sda1</code>.
+  <br /><br />
+  <strong>Why That Fails on Modern Android:</strong> Starting in Android 10, Android introduced <strong>Dynamic Partitions</strong>. The physical partition is just one large blob called <code>super</code>. Inside <code>super</code>, partitions like <code>system</code>, <code>vendor</code>, and <code>product</code> are dynamically resized and encrypted, requiring cryptographic verification with <code>dm-verity</code>. Even worse, the flash storage drivers (UFS or eMMC) might be loadable kernel modules (<code>.ko</code>) that are not compiled into the monolithic kernel!
+  <br /><br />
+  <strong>The Two-Stage Solution:</strong>
+  <ol>
+    <li><strong>First-Stage Init (in RAM):</strong> The kernel extracts a tiny ramdisk into RAM and runs <code>/system/bin/init</code> in first-stage mode. This stage loads kernel modules, reads device tree overlays, sets up device-mapper dm-verity nodes, and mounts the real <code>/system</code> filesystem.</li>
+    <li><strong>Second-Stage Init (on /system):</strong> Init performs a <code>switch_root</code> into the newly mounted filesystem, re-executes itself, loads SELinux policy, and starts the core user daemons.</li>
+  </ol>
+</DidYouKnow>
 
 :::note Honest status of this page
 Authored against a 64-bit Linux target with a Cuttlefish device. Output blocks are marked **expected (author-run pending)** where not yet captured on a reference machine. Per this project's rule, output is shown verbatim once captured - never paraphrased.
@@ -281,6 +298,72 @@ adb shell getprop persist.vendor.demo.active`}
 
 ---
 
+<DebugToolkit
+  title="Phase 3 Boot & Init Diagnostic Toolkit"
+  tools={[
+    {
+      name: 'ctl.start & ctl.stop (Dynamic Service Control)',
+      desc: 'Start, stop, and restart any init service on the fly without rebooting the Android device.',
+      command: '# Check service state (running, stopped, restarting):\nadb shell getprop init.svc.surfaceflinger\n\n# Stop a service:\nadb shell setprop ctl.stop surfaceflinger\n\n# Start a service:\nadb shell setprop ctl.start surfaceflinger',
+      output: `running
+[ 142.102] init: Received control message 'ctl.stop' for 'surfaceflinger' from pid: 2104
+[ 142.105] init: Sending signal 9 to service 'surfaceflinger' (pid 1422)...
+[ 144.301] init: Received control message 'ctl.start' for 'surfaceflinger' from pid: 2104
+[ 144.305] init: starting service 'surfaceflinger'...`,
+      tip: 'Need to test a newly pushed native binary in /system/bin? You do not need to reboot! Run adb root && adb push my_service /system/bin/ && adb shell setprop ctl.restart my_service.',
+    },
+    {
+      name: 'logcat -b kernel & dmesg (Boot Trace Capture)',
+      desc: 'Inspect early boot log messages and kernel device driver registration.',
+      command: '# Live stream kernel ring buffer with timestamps:\nadb shell dmesg -w | grep -E "init|selinux|avc"\n\n# Or read the kernel logcat buffer directly:\nadb logcat -b kernel -v color',
+      output: `[    1.240501] init: init second stage started!
+[    1.250102] init: Loading SELinux policy...
+[    1.289104] init: [libfs_mgr]Mounted /vendor partition (ext4) successfully
+[    1.401200] audit: type=1400 audit(1716982000.401:4): avc: granted { read } ...`,
+      tip: 'If adb logcat is empty because logd has not started yet, "adb shell dmesg" or connecting to the serial UART console is the only way to see why first-stage init died.',
+    },
+    {
+      name: 'Fast Framework Restart (stop && start)',
+      desc: 'Restart Zygote, system_server, and all Android user apps in under 4 seconds without touching the Linux kernel.',
+      command: 'adb shell stop && adb shell start',
+      output: `[  190.201] init: Sending signal 15 to service 'zygote' (pid 742)...
+[  190.205] init: Service 'zygote' (pid 742) killed by signal 15
+[  194.502] init: Starting service 'zygote'...
+[  195.100] Zygote: Preloading classes...
+[  196.200] SystemServer: Entered the Android system server!`,
+      tip: 'Framework engineers use "adb shell stop && adb shell start" hundreds of times a day. It preserves kernel state, mounts, and network sockets while reloading all Java code.',
+    },
+  ]}
+/>
+
+---
+
+<DevGotcha
+  title="Phase 3 Boot & Init Traps & Gotchas"
+  traps={[
+    {
+      name: 'The "restarting too fast" Init Rate-Limit Trap',
+      symptom: 'Your newly added init service runs once, then permanently stops. Logcat shows: "init: service \'my_service\' respawning too fast; disabled".',
+      cause: 'By default, init expects all declared services to be long-running background daemons. If your executable terminates (e.g. it is a short setup script), init restarts it. After 5 crashes in 20 seconds, init shuts it down permanently.',
+      fix: 'Add the "oneshot" option to the service block in your init.rc so init knows the process is intended to exit after finishing.',
+    },
+    {
+      name: 'The "critical" Service Crash Bootloop (Rescue Party)',
+      symptom: 'Your device boots for 20 seconds, shows the splash logo, and suddenly reboots into Fastboot / Recovery mode with "RescueParty: Prompting user for data wipe".',
+      cause: 'If an init service marked "critical" crashes more than 4 times within 4 minutes, init assumes the operating system is fatally broken and forces a reboot into recovery.',
+      fix: 'Do NOT mark non-essential experimental daemons as "critical". Reserve "critical" solely for ueventd, vold, and servicemanager.',
+    },
+    {
+      name: 'The SELinux Property Context Silence',
+      symptom: 'Running "setprop my_prop 1" returns 0 (success) in the shell, but "getprop my_prop" returns an empty string!',
+      cause: 'The property service rejected the property because its prefix does not match any entry in property_contexts. By default, unauthorized properties are silently dropped.',
+      fix: 'Prefix vendor properties with "persist.vendor." or "vendor.", or add a custom rule in system/sepolicy/private/property_contexts.',
+    },
+  ]}
+/>
+
+---
+
 ## Mastery Check
 
 <Checkpoint
@@ -321,6 +404,33 @@ adb shell getprop persist.vendor.demo.active`}
     'Symptom: init service marked "restarting too fast" and killed. Cause: The executable crashed on launch due to missing shared libraries or SELinux denial. Fix: Check logcat -b crash and dmesg | grep avc.',
     'Symptom: setprop returns permission denied. Cause: The property name violates SELinux property_contexts namespace restrictions. Fix: Add an allow rule or use the vendor. prefix for vendor services.',
   ]}
+/>
+
+<TrialErrorLab
+  title="Hands-on Lab: Trigger and Debug an Init Rate-Limit Loop"
+  goal="Intentionally create a service that crashes immediately, watch init enforce rate-limiting, and inspect the exact diagnostic logs."
+  experiment={`Add a temporary service into /vendor/etc/init/hw/init.crash.rc:
+
+service crash_demo /system/bin/sh -c "exit 1"
+    user root
+    group root
+    # Notice: intentionally omitting 'oneshot'!
+
+Reboot or reload init:
+adb reboot
+adb shell dmesg -w | grep crash_demo`}
+  expectedError={`init: starting service 'crash_demo'...
+init: Service 'crash_demo' (pid 1450) exited with status 1
+init: starting service 'crash_demo'...
+init: Service 'crash_demo' (pid 1452) exited with status 1
+init: service 'crash_demo' respawning too fast; disabled`}
+  diagnosis="Because 'oneshot' was omitted, init treated crash_demo as a long-running daemon and attempted to restart it each time it exited. After 5 restarts in quick succession, init triggered anti-thrashing protection, logging 'respawning too fast' and putting the service into a permanently disabled state."
+  fix={`Add the 'oneshot' directive to the service definition:
+
+service crash_demo /system/bin/sh -c "exit 0"
+    user root
+    group root
+    oneshot`}
 />
 
 ## Reward

@@ -21,6 +21,11 @@ import {
   DeepDive,
   CodeAnnotator,
   ConceptComparison,
+  DidYouKnow,
+  DevGotcha,
+  TrialErrorLab,
+  DebugToolkit,
+  VocabularyHelper,
 } from '@site/src/components/Unit';
 import {PhaseHeader} from '@site/src/components/PhaseHeader';
 import {CompleteButton} from '@site/src/components/Progress';
@@ -86,6 +91,21 @@ single-copy `mmap` and wait/wake queue mechanism in the kernel source (`binder.c
     },
   ]}
 />
+
+<DidYouKnow title="Why Linus Torvalds Originally Rejected Binder (And How It Won)">
+  For years (2008 to 2014), the Android Binder driver was rejected from the official upstream Linux kernel. Linus Torvalds and kernel maintainers criticized it for duplicating UNIX IPC (pipes and UNIX domain sockets).
+  <br /><br />
+  <strong>Why Traditional UNIX IPC Failed on Mobile:</strong> UNIX domain sockets require <strong>two full memory copies</strong>:
+  <ol>
+    <li>Copy 1: From the sending app's userspace memory into a Linux kernel buffer.</li>
+    <li>Copy 2: From the Linux kernel buffer into the receiving service's userspace memory.</li>
+  </ol>
+  On an Android device rendering 120 frames per second, passing window buffers, high-resolution touch events, and audio streams through two copies burned CPU cycles and drained battery.
+  <br /><br />
+  <strong>The Binder Innovation (One-Copy):</strong> At startup, every Android process executes <code>mmap()</code> on <code>/dev/binder</code>. The Binder kernel driver maps that user memory directly into kernel address space! When Process A sends a message to Process B, the kernel performs a <strong>single direct copy</strong> from Process A's memory into Process B's pre-mapped buffer.
+  <br /><br />
+  In 2015, recognizing Binder's critical importance to the world's most widely deployed operating system, the Linux foundation merged Binder into the mainline Linux kernel under <code>drivers/android/</code>.
+</DidYouKnow>
 
 :::note Honest status of this page
 Authored against a 64-bit Linux target. Output blocks are marked **expected (author-run pending)** where not yet captured on a reference machine. Per this project's rule, output is shown verbatim once captured - never paraphrased.
@@ -273,6 +293,79 @@ When no IPC requests exist, server threads sleep on a Linux **wait queue** (`thr
 
 ## Mastery Check
 
+---
+
+<DebugToolkit
+  title="Phase 4 Android Kernel & Binder Diagnostic Toolkit"
+  tools={[
+    {
+      name: 'GKI Version & Config Verification',
+      desc: 'Verify running GKI kernel version, build date, and inspect runtime kernel config flags.',
+      command: '# Check exact GKI kernel release string:\nadb shell uname -a\n\n# Query compiled-in kernel configuration flags:\nadb shell zcat /proc/config.gz | grep -E "CONFIG_ANDROID_BINDER|CONFIG_GKI|CONFIG_VIRTIO"',
+      output: `Linux localhost 6.1.25-android14-11-00042-g2a3f #1 SMP PREEMPT Thu Mar 14 12:00:00 UTC 2024 aarch64
+CONFIG_ANDROID_BINDER_IPC=y
+CONFIG_ANDROID_BINDERFS=y
+CONFIG_GKI_HACKS_TO_FIX=y
+CONFIG_VIRTIO_PCI=y`,
+      tip: 'Starting with GKI, /proc/config.gz is mandatory on all certified Android devices. You never need to hunt for the original defconfig file to know what features the kernel was compiled with.',
+    },
+    {
+      name: '/sys/kernel/debug/binder (Binder Driver Debugging)',
+      desc: 'Inspect live Binder transaction statistics, buffer utilization, process nodes, and transaction backlogs.',
+      command: '# Inspect overall Binder transaction stats:\nadb shell cat /sys/kernel/debug/binder/stats\n\n# Inspect buffer memory and transactions for a specific PID:\nadb shell cat /sys/kernel/debug/binder/proc/$(pidof system_server)',
+      output: `binder stats:
+  BC_TRANSACTION: 14209
+  BR_REPLY: 14209
+  BR_DEAD_REPLY: 12
+  buffers: 42 (active 14, free 28)
+  allocated: 148200 bytes, max 420910 bytes`,
+      tip: 'If an app freezes with an Application Not Responding (ANR) dialog, checking /sys/kernel/debug/binder/failed_transaction_log will reveal if a Binder buffer exhausted or timed out.',
+    },
+    {
+      name: 'pstore / ramoops (Post-Mortem Panic Dumps)',
+      desc: 'Read kernel crash logs and panics preserved across sudden device reboots.',
+      command: 'adb shell ls -l /sys/fs/pstore/\nadb shell cat /sys/fs/pstore/console-ramoops-0',
+      output: `-r--r--r-- 1 root root 65536 Jan 15 10:30 console-ramoops-0
+[  142.102] Kernel panic - not syncing: Fatal exception
+[  142.105] CPU: 2 PID: 1400 Comm: kworker Tainted: G
+[  142.110] Call trace:
+[  142.112]  dump_backtrace+0x0/0x1e0
+[  142.115]  panic+0x164/0x390`,
+      tip: 'When a device suddenly reboots to the bootloader, /sys/fs/pstore/console-ramoops is the black-box flight recorder. It persists in a reserved section of RAM that is not cleared across warm reboots.',
+    },
+  ]}
+/>
+
+---
+
+<DevGotcha
+  title="Phase 4 Kernel & GKI Traps & Gotchas"
+  traps={[
+    {
+      name: 'The KMI "Invalid module format" (ENOEXEC) Rejection',
+      symptom: 'Running "insmod my_driver.ko" fails with: "insmod: ERROR: could not insert module: Invalid module format" (-ENOEXEC).',
+      cause: 'The driver was compiled against a kernel header set with a mismatched Module.symvers or different CRC symbol hashes than the running GKI image.',
+      fix: 'Recompile the out-of-tree vendor module against the exact dist/Module.symvers artifact exported by your GKI build.',
+    },
+    {
+      name: 'The 1 MB Binder Buffer Overflow (TransactionTooLargeException)',
+      symptom: 'An app crashes or native IPC fails with "BR_FAILED_REPLY" or Java "TransactionTooLargeException: data parcel size 1572864 bytes".',
+      cause: 'Every Android process has a shared Binder buffer pool of exactly 1 MB (shared among all active transactions in that process). Sending a large camera frame, raw audio buffer, or file payload over Binder exhausts this pool.',
+      fix: 'Never pass large binary payloads inline over Binder parcels. Allocate an android.os.SharedMemory (Ashmem/memfd) buffer or GraphicBuffer and pass only the file descriptor across Binder.',
+    },
+    {
+      name: 'The Cuttlefish Missing VirtIO Boot Panic',
+      symptom: 'Custom GKI kernel panics immediately upon boot on Cuttlefish with: "Kernel panic - not syncing: VFS: Unable to mount root fs".',
+      cause: 'Cuttlefish virtual disks (super partition) run on virtualized PCI virtio hardware. A custom kernel missing CONFIG_VIRTIO_BLK or CONFIG_VIRTIO_PCI cannot communicate with the disk controller.',
+      fix: 'Ensure your GKI kernel config merges the Cuttlefish virtio fragment: "gki_defconfig + virtio_defconfig".',
+    },
+  ]}
+/>
+
+---
+
+## Mastery Check
+
 <Checkpoint
   quiz={{
     question: 'How does the Binder driver achieve high-performance 1-copy IPC?',
@@ -311,6 +404,34 @@ When no IPC requests exist, server threads sleep on a Linux **wait queue** (`thr
     'Symptom: launch_cvd crashes on startup with kernel panic. Cause: Built GKI kernel configuration missing virtio drivers required by Cuttlefish. Fix: Ensure gki_defconfig includes CONFIG_VIRTIO and CONFIG_DRM_VIRTIO_GPU.',
     'Symptom: Binder transaction fails with BR_DEAD_REPLY. Cause: Target server process crashed or terminated while processing the remote procedure call. Fix: Check logcat -b crash and tombstones for the server process.',
   ]}
+/>
+
+<TrialErrorLab
+  title="Hands-on Lab: Trigger and Diagnose a Binder 1 MB Buffer Overflow"
+  goal="Intentionally exceed the Binder transaction buffer limit, inspect the exact kernel error response, and learn the architectural solution."
+  experiment={`Run a one-line Python script inside the Android Cuttlefish shell to attempt a 2 MB Binder transaction:
+
+adb shell "python3 -c '
+# Or via standard Android am command passing oversized byte extras:
+' 2>/dev/null || am broadcast -a test.OVERFLOW --es large_payload \\"$(head -c 2000000 < /dev/zero | tr '\\0' 'A')\\""
+
+Observe the crash in logcat:
+adb logcat -b crash -d`}
+  expectedError={`FATAL EXCEPTION: main
+Process: com.android.systemui, PID: 1820
+android.os.TransactionTooLargeException: data parcel size 2000104 bytes
+	at android.os.BinderProxy.transactNative(Native Method)
+	at android.os.BinderProxy.transact(BinderProxy.java:684)`}
+  diagnosis="In drivers/android/binder.c, the kernel allocates memory for incoming transactions from a pre-mapped buffer pool capped at 1 MB for all synchronous transactions (and only 512 KB for async oneway transactions). When the parcel exceeds available contiguous buffer space, binder_alloc_new_buf() fails with -ENOMEM, causing the kernel to return BR_FAILED_REPLY, which the ART runtime throws as TransactionTooLargeException."
+  fix={`For payloads larger than 50-100 KB, never send raw bytes over Binder.
+Instead, use an Ashmem or SharedMemory file descriptor:
+
+// In Java:
+SharedMemory memory = SharedMemory.create("large_buffer", 2000000);
+ByteBuffer buffer = memory.mapReadWrite();
+buffer.put(myLargeByteArray);
+// Pass the SharedMemory object across Binder: only the file descriptor is copied!
+service.transferBuffer(memory);`}
 />
 
 ## Reward

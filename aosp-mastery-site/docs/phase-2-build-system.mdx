@@ -20,6 +20,11 @@ import {
   DeepDive,
   CodeAnnotator,
   ConceptComparison,
+  DidYouKnow,
+  DevGotcha,
+  TrialErrorLab,
+  DebugToolkit,
+  VocabularyHelper,
 } from '@site/src/components/Unit';
 import {PhaseHeader} from '@site/src/components/PhaseHeader';
 import {CompleteButton} from '@site/src/components/Progress';
@@ -83,6 +88,14 @@ Kati, and Ninja.
     },
   ]}
 />
+
+<DidYouKnow title="Why AOSP Replaced GNU Make with Soong & Blueprint">
+  Up through Android 6.0 (Marshmallow), AOSP was built using standard GNU Make and thousands of <code>Android.mk</code> files.
+  <br /><br />
+  <strong>The Nightmare:</strong> By 2015, the AOSP source tree contained over 4,500 <code>Android.mk</code> files. Because GNU Make is an interpreted macro language, it had to dynamically evaluate thousands of bash shell sub-commands, loops, and string substitutions. On a powerful 32-core server, just <em>parsing</em> the Makefiles took <strong>25 to 40 minutes</strong> before a single C++ file could be compiled! Furthermore, Make allowed files to modify global variables, making incremental builds notoriously unreliable (engineers constantly had to run <code>make clean</code>).
+  <br /><br />
+  <strong>The Revolution:</strong> Google developed <strong>Soong</strong> and the <strong>Blueprint DSL (<code>Android.bp</code>)</strong>. Blueprint has <strong>zero Turing-completeness</strong>: it has no <code>if</code> statements, no loops, and no environment variable access. Because it is purely declarative, Soong parses all 10,000+ modules across AOSP in less than <strong>30 seconds</strong> using parallel Go routines, emitting an immutable Ninja execution graph!
+</DidYouKnow>
 
 :::note Honest status of this page
 Authored against a 64-bit Linux target. Output blocks are marked **expected (author-run pending)** where not yet captured on a reference machine. Per this project's rule, output is shown verbatim once captured - never paraphrased.
@@ -327,6 +340,67 @@ Access the visual interactive screen of your running Cuttlefish Android device b
 
 ---
 
+<DebugToolkit
+  title="Phase 2 AOSP Build & Ninja Diagnostic Toolkit"
+  tools={[
+    {
+      name: 'SHOWCOMMAND=true & Ninja Query',
+      desc: 'Inspect the exact Clang/Rust command line invocation, header search paths (-I), and compiler flags used for any single object file.',
+      command: '# View full compiler flags during an incremental build:\nm SHOWCOMMAND=true <module_name>\n\n# Or query Ninja directly without building:\nninja -f out/combined-aosp_cf_x86_64_phone.ninja -t query out/soong/.intermediates/.../foo.o',
+      output: `[1/1] out/soong/host/linux-x86/bin/clang++ -c system/core/init/main.cpp -o out/.../main.o \\
+  -I system/core/init -D__ANDROID__ -Wall -Werror -O2 -fno-exceptions -fno-rtti \\
+  --target=x86_64-linux-android10000 ...`,
+      tip: 'When a C++ file fails to compile due to missing headers, never guess which path is wrong. Run m SHOWCOMMAND=true to inspect all -I and -isystem flags passed to Clang.',
+    },
+    {
+      name: 'Fast Single-Module Compilation (m vs mm vs mmm)',
+      desc: 'Compile just the module you are editing in seconds instead of running a full platform build.',
+      command: '# Fastest: specify module name defined in Android.bp:\nm libart\nm init\n\n# Build the module in the current directory:\nmm\n\n# Build modules in a specific directory:\nmmm system/core/init',
+      output: `[100% 12/12] Linking out/target/product/vsoc_x86_64/system/bin/init
+#### build completed successfully (14 seconds) ####`,
+      tip: 'Avoid mm or mmm in modern Android; simply running "m <module_name>" from anywhere in the tree is faster because Soong knows the exact dependency DAG without re-scanning directory Makefiles.',
+    },
+    {
+      name: 'Ninja Explain & Dependency Graph Verification',
+      desc: 'Understand exactly WHY Ninja decided to rebuild a file or module during an incremental build.',
+      command: 'NINJA_ARGS="-d explain" m init',
+      output: `ninja explain: out/.../main.o is dirty: system/core/init/main.cpp timestamp 1716982000 vs out timestamp 1716981500
+ninja explain: system/bin/init is dirty: out/.../main.o is newer than out/target/product/.../init
+[1/2] Compiling main.cpp...
+[2/2] Linking init...`,
+      tip: 'If Ninja rebuilds files unexpectedly even when you made no edits, NINJA_ARGS="-d explain" will pinpoint the exact header file or generator timestamp causing the rebuild.',
+    },
+  ]}
+/>
+
+---
+
+<DevGotcha
+  title="Phase 2 Build Traps & Gotchas"
+  traps={[
+    {
+      name: 'The Treble Partition Isolation Link Trap (vendor_available)',
+      symptom: 'Build fails with: "error: ... (native:platform) should not link to ... (native:vendor)" or "module ... is not available to the vendor".',
+      cause: 'Project Treble strictly separates /system (Google framework) from /vendor (OEM device drivers and HALs). A vendor module cannot link against a system shared library unless that library explicitly declares support.',
+      fix: 'Add "vendor_available: true" to the target library definition in Android.bp, or declare a dedicated VNDK / vendor-specific variant.',
+    },
+    {
+      name: 'The Dirty Tree /out Phantom Trap',
+      symptom: 'An incremental build fails with bizarre symbol errors or "multiple rules generate ..." after switching Git branches.',
+      cause: 'Stale build artifacts in out/ from a previous branch clash with newly generated Ninja rules from the new branch.',
+      fix: 'Run "m installclean" (which deletes target image files and binaries while preserving intermediate object caches). Only use full "m clean" if dependency corruption persists.',
+    },
+    {
+      name: 'Missing envsetup in New Terminal Tabs',
+      symptom: 'Running "m" or "croot" in a new terminal tab prints "bash: m: command not found".',
+      cause: 'The AOSP build functions are shell functions initialized by build/envsetup.sh; they are not global Linux binaries in /usr/bin.',
+      fix: 'Run "source build/envsetup.sh && lunch <your-target>" whenever opening a new terminal.',
+    },
+  ]}
+/>
+
+---
+
 ## Mastery Check
 
 <Checkpoint
@@ -367,6 +441,37 @@ Access the visual interactive screen of your running Cuttlefish Android device b
     'Symptom: lunch fails with "Cannot locate config for <target>". Cause: Typos in product name or lunch target not declared in AndroidProducts.mk. Fix: Check the available lunch list via lunch (with no arguments).',
     'Symptom: Ninja build fails with "multiple rules generate ...". Cause: Conflicting build outputs between a Soong rule and an older Kati Android.mk rule. Fix: Remove the redundant Android.mk or rename target outputs.',
   ]}
+/>
+
+<TrialErrorLab
+  title="Hands-on Lab: Catch and Fix a Treble Vendor Violation in Android.bp"
+  goal="Intentionally link a vendor binary to a private system library, observe the exact Soong rejection error, and fix the module definition."
+  experiment={`Add a vendor binary in a local test Android.bp:
+
+cc_binary {
+    name: "my_vendor_tool",
+    srcs: ["main.cpp"],
+    vendor: true, // Installed to /vendor/bin/
+    shared_libs: [
+        "liblog",
+        "libbase",
+        // Trying to link a private internal system library:
+        "libsystem_internal_service", 
+    ],
+}
+
+Run the build:
+m my_vendor_tool`}
+  expectedError={`FAILED: ninja: 'out/soong/build.ninja' incomplete
+error: path/Android.bp:10:1: "my_vendor_tool" depends on "libsystem_internal_service" which is not available to the vendor.`}
+  diagnosis="Android's Project Treble enforces architectural boundary isolation. Modules installed on the /vendor partition can only link against libraries that explicitly set 'vendor_available: true' (or 'vendor: true'). This prevents hardware vendor code from binding to private internal OS frameworks that change across Android OS updates."
+  fix={`If you have access to libsystem_internal_service's Android.bp, mark it accessible:
+
+cc_library {
+    name: "libsystem_internal_service",
+    srcs: ["service.cpp"],
+    vendor_available: true, // Allows both /system and /vendor binaries to link
+}`}
 />
 
 ## Reward

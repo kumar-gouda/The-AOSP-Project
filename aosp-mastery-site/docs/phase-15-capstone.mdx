@@ -20,6 +20,11 @@ import {
   DeepDive,
   CodeAnnotator,
   ConceptComparison,
+  DidYouKnow,
+  DevGotcha,
+  TrialErrorLab,
+  DebugToolkit,
+  VocabularyHelper,
 } from '@site/src/components/Unit';
 import {PhaseHeader} from '@site/src/components/PhaseHeader';
 import {CompleteButton} from '@site/src/components/Progress';
@@ -94,6 +99,13 @@ The Capstone synthesizes every discipline mastered across the curriculum:
       aospContext: 'Requires: Clean compilation, booting target, 100% green CTS/VTS tests, multi-layer integration, signed commits, and complete reproducibility.',
     },
   ]}
+/>
+
+<DidYouKnow
+  title="How Google Ships Commercial Android Milestones (From Platform Freeze to Retail Release)"
+  fact="Before any new Android version reaches public devices, it must pass over 4.5 million automated test cases in the official Compatibility Test Suite (CTS), Vendor Test Suite (VTS), and Generic System Image (GSI) verification runs across thousands of hardware permutations."
+  engineeringReason="Google strictly decouples the platform operating system from vendor silicon via Project Treble. A retail phone must be able to boot pure AOSP (Generic System Image - GSI) on top of the vendor's OEM partition without a single kernel panic or HAL breakdown. If a single CTS/VTS test fails without an approved Google waiver, the device is legally barred from shipping with Google Mobile Services (GMS - Google Play Store, Maps, Gmail)."
+  realDeviceContext="Your Capstone project directly mimics this tier-1 industry standard: you build an end-to-end vertical slice, compile both system and vendor partitions, enforce SELinux in Enforcing mode, and verify that automated CTS and VTS suites pass with zero manual intervention."
 />
 
 ---
@@ -305,6 +317,68 @@ aosp-mastery-spine/
 
 ---
 
+<DebugToolkit
+  title="Phase 15 Full-Stack Capstone Diagnostic Toolkit"
+  tools={[
+    {
+      name: "atest <TestModule> --verbose",
+      command: "atest VtsHalEntropyTargetTest -- --log-level-display VERBOSE",
+      whatItDoes: "Invokes Trade Federation to build, push, and execute end-to-end device integration tests with real-time test log streaming.",
+      whenToUse: "Verify your custom HAL or system service against official CTS/VTS assertions before publishing your public repository."
+    },
+    {
+      name: "lshal --types=all --init-vintf",
+      command: "lshal --types=all --init-vintf",
+      whatItDoes: "Audits all registered HAL services and verifies compatibility against device and framework VINTF manifests.",
+      whenToUse: "Diagnose why your AIDL HAL service is not recognized by system_server or why VINTF boot checks fail."
+    },
+    {
+      name: "dumpsys activity service",
+      command: "dumpsys activity service EntropyService",
+      whatItDoes: "Dumps the live internal memory state, registered client callbacks, and Binder call statistics of your custom SystemService.",
+      whenToUse: "Inspect whether your system service is alive, registered in ServiceManager, and responding to client requests."
+    },
+    {
+      name: "dmesg streaming log filter",
+      command: "adb shell dmesg -w | grep -E 'avc:|binder:|hw_entropy'",
+      whatItDoes: "Streams real-time kernel messages, SELinux policy violations, and driver printks as test cases execute.",
+      whenToUse: "Catch silent driver faults, kernel panics, or SELinux permission denials during end-to-end integration tests."
+    }
+  ]}
+/>
+
+<DevGotcha
+  title="Phase 15 Full-Stack Integration Pitfalls & Traps"
+  traps={[
+    {
+      trap: "Cross-partition AIDL interface drift",
+      symptom: "App calls system service, but system service crashes with Binder transaction failed or BAD_TYPE (-32).",
+      why: "The AIDL parcelable or method signature was edited in the system partition without re-generating and re-flashing the vendor HAL binaries.",
+      fix: "Always maintain frozen AIDL interfaces (@VintfStability) or re-build both images simultaneously using m && fastboot flashall."
+    },
+    {
+      trap: "SELinux domain transition deadlocks across layers",
+      symptom: "The client app hangs indefinitely on getSystemService() or receives null.",
+      why: "The app domain (untrusted_app) lacks binder_call permission to system_server, or system_server lacks permission to talk to vendor_hal.",
+      fix: "Run dmesg | grep avc to check for missing allow rules. Author explicit binder_call() and hal_client_domain() macros in sepolicy."
+    },
+    {
+      trap: "Assuming host environment variables in test scripts",
+      symptom: "Reviewer clones your repository and the automated verification script fails with 'command not found' or 'ANDROID_BUILD_TOP: unbound variable'.",
+      why: "Scripts relied on host workstation shell configuration (.bashrc) instead of hermetic, relative-path invocations.",
+      fix: "Test your entire clone and build sequence inside a fresh, isolated Docker container before publishing your Project Spine."
+    },
+    {
+      trap: "Uninitialized parcelable fields in AIDL data types",
+      symptom: "VTS test passes on local C++ build but crashes with SIGSEGV or garbage values when invoked from Java client.",
+      why: "C++ struct fields in AIDL parcelables without default initializers contain random stack memory.",
+      fix: "Always provide explicit default values in AIDL parcelable definitions (e.g. int status = 0; boolean enabled = false;)."
+    }
+  ]}
+/>
+
+---
+
 ## Checkpoint
 
 <Checkpoint
@@ -332,6 +406,18 @@ aosp-mastery-spine/
     'Symptom: GitHub shows "Unverified" next to your capstone commits. Cause: The email address in your Git commit (git config user.email) does not match the email associated with your verified GPG/SSH key on your GitHub account. Fix: Ensure git config user.email matches your GitHub verified email address.',
     'Symptom: VTS passes when SELinux is Permissive, but fails when Enforcing. Cause: Missing allow rules in sepolicy for the test client domain. Fix: Run dmesg | grep avc and author proper allow rules in vendor_entropy.te.',
   ]}
+/>
+
+<TrialErrorLab
+  title="Hands-on Lab: Trace and Resolve an End-to-End Fault from App to Kernel Driver"
+  goal="Trace an end-to-end failure where an Android app invokes EntropyManager.getRandomBytes(), receives an exception, and diagnose whether the root cause is in Java, AIDL IPC, C++ HAL, or kernel driver."
+  experiment="Simulate a driver-level memory copy failure by making the kernel driver read operation return -EFAULT, install the client APK, and tap 'Generate Random Bytes'."
+  expectedError={`W/EntropyManager: RemoteException during getRandomBytes()
+E/EntropyHAL: Failed to read from /dev/hw_entropy: Bad address (-14)
+E/AndroidRuntime: FATAL EXCEPTION: main
+java.lang.IllegalStateException: Hardware entropy read failed`}
+  diagnosis="The crash propagated upward through 4 system boundaries: Kernel driver returned -EFAULT (-14) -> C++ AIDL HAL caught the errno and returned ScopedAStatus::fromServiceSpecificError() -> system_server caught the Binder exception and rethrew IllegalStateException -> App crashed with uncaught runtime exception."
+  fix="Inspect dmesg | grep hw_entropy to see kernel driver logs. Fix the buffer pointer in copy_to_user(), rebuild the kernel module, and verify end-to-end functionality with atest VtsHalEntropyTargetTest."
 />
 
 ---

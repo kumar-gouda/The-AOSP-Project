@@ -21,6 +21,11 @@ import {
   DeepDive,
   CodeAnnotator,
   ConceptComparison,
+  DidYouKnow,
+  DevGotcha,
+  TrialErrorLab,
+  DebugToolkit,
+  VocabularyHelper,
 } from '@site/src/components/Unit';
 import {PhaseHeader} from '@site/src/components/PhaseHeader';
 import {CompleteButton} from '@site/src/components/Progress';
@@ -101,6 +106,16 @@ Navigating the Android Java framework requires understanding how the OS exposes 
     },
   ]}
 />
+
+<DidYouKnow title="Why Android Requires 'clearCallingIdentity' (And the Catastrophic Bug If You Forget)">
+  When an app calls a framework service like <code>LocationManager.getLastKnownLocation()</code>, the method executes inside <code>system_server</code>.
+  <br /><br />
+  <strong>The Security Dilemma:</strong> Even though the code runs inside <code>system_server</code>, the executing thread retains the <strong>calling app's Linux UID</strong> (e.g. UID 10142). If <code>system_server</code> tries to open the GPS device node (<code>/dev/gnss0</code>) or communicate with the hardware HAL, the Linux kernel and SELinux check UID 10142. Because third-party apps have no hardware permissions, the kernel blocks the access!
+  <br /><br />
+  <strong>The Solution:</strong> Android engineers created <code>long token = Binder.clearCallingIdentity();</code>. This resets the executing thread's UID to <code>system_server</code>'s own identity (UID 1000, <code>AID_SYSTEM</code>), which has full hardware permissions to talk to the HAL.
+  <br /><br />
+  <strong>The Deadly Trap:</strong> <code>clearCallingIdentity()</code> MUST always be paired with <code>Binder.restoreCallingIdentity(token)</code> inside a <code>finally</code> block! If an unhandled exception skips restoration, that worker thread is permanently stuck running as UID 1000. When that thread is recycled to handle another app's request, that random untrusted app suddenly gains full root/system access!
+</DidYouKnow>
 
 ---
 
@@ -461,6 +476,71 @@ All tests passed!`}
 
 ---
 
+<DebugToolkit
+  title="Phase 7 Framework & SystemServer Diagnostic Toolkit"
+  tools={[
+    {
+      name: 'dumpsys (Internal Service State Inspection)',
+      desc: 'Inspect the live internal memory state, active clients, and history of any SystemService.',
+      command: '# Dump state of your custom service:\nadb shell dumpsys foo\n\n# Dump with priority/arguments:\nadb shell dumpsys foo --proto\nadb shell dumpsys activity services | grep -i "foo"',
+      output: `FOO SERVICE (dumpsys foo)
+  Hardware status: CONNECTED (AIDL HAL v1)
+  Active clients: 3
+  Last sensor reading: 42
+  Total transactions processed: 1409`,
+      tip: 'Always implement the dump() method in your SystemService! It is the primary tool Google SREs and Android engineers use to debug production issues in bugreports.',
+    },
+    {
+      name: 'kill -3 (Thread Stack & Lock Contention Dump)',
+      desc: 'Trigger an instant Java thread dump of all 100+ threads in system_server to diagnose ANRs and deadlocks.',
+      command: '# Send SIGQUIT (signal 3) to system_server:\nadb shell kill -3 $(pidof system_server)\n\n# Read generated trace:\nadb shell cat /data/anr/traces.txt | head -n 50',
+      output: `"ActivityManager" prio=5 tid=18 Blocked
+  - waiting to lock <0x0a1b2c3d> (a com.android.server.am.ActivityManagerService)
+  held by thread 24 ("FooServiceWorker")
+"FooServiceWorker" prio=5 tid=24 Runnable
+  at com.android.server.foo.FooService.syncData(FooService.java:142)`,
+      tip: 'Sending kill -3 does NOT kill or crash the process! In the ART runtime, SIGQUIT triggers a clean dump of all thread stacks and held locks to /data/anr/traces.txt.',
+    },
+    {
+      name: 'Fast SystemServer Hot-Swap (m services)',
+      desc: 'Recompile and push changes to framework services in under 15 seconds without rebuilding system images.',
+      command: '# 1. Build only the framework services jar:\nm services\n\n# 2. Push directly to device and restart framework:\nadb root && adb remount\nadb push $ANDROID_PRODUCT_OUT/system/framework/services.jar /system/framework/\nadb shell stop && adb shell start',
+      output: `[100% 4/4] Linking out/.../services.jar
+services.jar: 1 file pushed. 14.2 MB/s (18290124 bytes in 1.22s)
+[init: restarting zygote and system_server...]`,
+      tip: 'Do not flash the full system image when testing framework Java changes. Pushing services.jar and restarting the framework via "stop && start" cuts iteration time from minutes to seconds.',
+    },
+  ]}
+/>
+
+---
+
+<DevGotcha
+  title="Phase 7 Framework & SystemServer Traps & Gotchas"
+  traps={[
+    {
+      name: 'The Forgotten restoreCallingIdentity() Security Leak',
+      symptom: 'Intermittent security audit failures, or third-party apps unexpectedly performing privileged system operations.',
+      cause: 'Binder.clearCallingIdentity() was called without a try-finally block. If an exception occurred before restoreCallingIdentity(token), the Binder worker thread returned to the thread pool while permanently retaining root/system UID (UID 1000).',
+      fix: 'Always use the canonical try-finally idiom:\nfinal long token = Binder.clearCallingIdentity();\ntry {\n    mHal.callPrivilegedMethod();\n} finally {\n    Binder.restoreCallingIdentity(token);\n}',
+    },
+    {
+      name: 'Constructor Dependency NullPointerException Bootloop',
+      symptom: 'The device hangs on the Android splash screen; logcat shows system_server crashing with NullPointerException during boot.',
+      cause: 'Your SystemService constructor called ServiceManager.getService("power") or Context.getSystemService(). During early boot, dependent services have not yet been registered, returning null.',
+      fix: 'Keep the constructor lightweight. Defer all inter-service lookups to the onBootPhase(PHASE_SYSTEM_SERVICES_READY) lifecycle callback.',
+    },
+    {
+      name: 'Blocking the Main Looper (Watchdog 60s Reboot)',
+      symptom: 'Device works for 1 minute, then abruptly reboots; logcat shows "WATCHDOG KILLING SYSTEM PROCESS: Blocked in handler on ActivityManager".',
+      cause: 'You ran synchronous network calls, slow disk I/O, or a blocking Binder call on system_server\'s main looper or FgThread.',
+      fix: 'Always dispatch blocking operations to a dedicated HandlerThread or use IoThread.getExecutor().',
+    },
+  ]}
+/>
+
+---
+
 ## Checkpoint
 
 <Checkpoint
@@ -488,6 +568,42 @@ All tests passed!`}
     'Symptom: App crashes with SecurityException: Requires ACCESS_FOO_HARDWARE. Cause: The calling application did not declare <uses-permission android:name="android.permission.ACCESS_FOO_HARDWARE" /> in AndroidManifest.xml. Fix: Add the permission tag to the app manifest and grant it via pm grant if necessary.',
     'Symptom: Context.getSystemService(FooManager.class) returns null in the application. Cause: Missing registration in SystemServiceRegistry.java or the service failed to publish in SystemServer.startOtherServices(). Fix: Check adb shell service check foo.',
   ]}
+/>
+
+<TrialErrorLab
+  title="Hands-on Lab: Trigger and Debug a system_server Watchdog Kill"
+  goal="Intentionally block system_server's main thread, observe the Android Watchdog trigger, and inspect the resulting stack trace."
+  experiment={`Add an intentional block inside your SystemService publish method on the main thread:
+
+// Inside FooService.java:
+@Override
+public void onStart() {
+    publishBinderService("foo", mImpl);
+    // Intentionally block the main handler thread:
+    try {
+        android.util.Log.e("FooService", "Simulating severe main thread blockage...");
+        Thread.sleep(65 * 1000); // Exceeds the 60-second Watchdog limit!
+    } catch (InterruptedException e) {}
+}
+
+Build and restart the framework:
+m services && adb push $ANDROID_PRODUCT_OUT/system/framework/services.jar /system/framework/ && adb shell stop && adb shell start`}
+  expectedError={`Watchdog: *** WATCHDOG KILLING SYSTEM PROCESS: Blocked in handler on main thread (main)
+Watchdog: main annotated stack trace:
+Watchdog:     at java.lang.Thread.sleep(Native Method)
+Watchdog:     at com.android.server.foo.FooService.onStart(FooService.java:42)
+Exit: Fatal exception in system_server (Exit code: 10)`}
+  diagnosis="Android's Watchdog runs a background thread that periodically posts runnable checks to critical message queues (main, fg, ui, io). If a handler fails to complete within 60 seconds, the Watchdog assumes the entire operating system is deadlocked, logs a full thread stack trace to /data/anr/, and intentionally terminates system_server with exit code 10. Init detects system_server's death and restarts the entire userspace."
+  fix={`Never perform blocking operations on system_server lifecycle threads. Offload work to a background thread:
+
+@Override
+public void onStart() {
+    publishBinderService("foo", mImpl);
+    com.android.server.IoThread.getExecutor().execute(() -> {
+        // Safe: runs asynchronously on the dedicated I/O thread pool!
+        initializeHardwareSync();
+    });
+}`}
 />
 
 ---

@@ -20,6 +20,11 @@ import {
   DeepDive,
   CodeAnnotator,
   ConceptComparison,
+  DidYouKnow,
+  DevGotcha,
+  TrialErrorLab,
+  DebugToolkit,
+  VocabularyHelper,
 } from '@site/src/components/Unit';
 import {PhaseHeader} from '@site/src/components/PhaseHeader';
 import {CompleteButton} from '@site/src/components/Progress';
@@ -85,6 +90,16 @@ that every later phase in Android depends on.
     },
   ]}
 />
+
+<DidYouKnow title="Why Android Created Ashmem & memfd Instead of Classical POSIX Shared Memory">
+  In traditional Linux desktop systems, POSIX shared memory (<code>shm_open</code>) creates persistent named segments under <code>/dev/shm</code>.
+  <br /><br />
+  <strong>The Problem on Mobile:</strong> If a buggy app allocates 50 MB of shared memory and crashes, standard POSIX shared memory leaves that 50 MB allocated in RAM forever until the device reboots! On early Android phones with only 256 MB or 512 MB of total RAM, a few app crashes would starve the entire operating system of memory.
+  <br /><br />
+  <strong>The Android Innovation:</strong> Google created <strong>Ashmem</strong> (Android Shared Memory). Ashmem uses file descriptors instead of global filesystem names. When a process crashes, the Linux kernel automatically closes all of its open file descriptors, instantly freeing the physical RAM! Furthermore, Ashmem introduced "pinning/unpinning", allowing the kernel to purge unpinned graphic buffers under memory pressure.
+  <br /><br />
+  Google later upstreamed this exact design into the mainline Linux kernel as <code>memfd_create()</code>, which is now used by modern Linux desktops, Wayland compositors, and Android today.
+</DidYouKnow>
 
 :::note Honest status of this page
 Authored against a 64-bit Linux target. Output blocks are marked **expected (author-run pending)** where not yet captured on a reference machine. Per this project's rule, output is shown verbatim once captured - never paraphrased.
@@ -493,6 +508,71 @@ Notice what happened at the kernel level:
 
 ---
 
+<DebugToolkit
+  title="Phase 1 Systems & Syscall Diagnostic Toolkit"
+  tools={[
+    {
+      name: 'strace (System Call Tracer)',
+      desc: 'Trace all kernel boundary crossings made by a process, including file operations, memory mappings, and process forks.',
+      command: 'strace -f -e trace=openat,mmap,clone,execve,shm_open -s 128 ./producer_consumer\n# -f = follow child processes created via fork/clone\n# -e trace=... = filter specific syscalls of interest\n# -s 128 = print first 128 characters of strings/buffers',
+      output: `[pid 29401] shm_open("aosp_shm", O_RDWR|O_CREAT, 0666) = 3
+[pid 29401] ftruncate(3, 4096) = 0
+[pid 29401] mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_SHARED, 3, 0) = 0x7fa2c0000000
+[pid 29401] clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, ...) = 29402`,
+      tip: 'In Android Cuttlefish or root ADB, you can attach strace directly to any running native daemon or app: "adb shell strace -p $(pidof surfaceflinger) -e trace=ioctl,binder".',
+    },
+    {
+      name: '/proc/[pid]/maps & pmap (Memory Layout Inspection)',
+      desc: 'Inspect the complete virtual memory layout of any active process to examine stack, heap, and shared memory mappings.',
+      command: 'cat /proc/$PID/maps | grep -E "stack|heap|aosp_shm"\n# Or use pmap for human-readable byte counts:\npmap -x $PID',
+      output: `55c1d4200000-55c1d4201000 r--p 00000000 08:02 1048590  /usr/bin/producer_consumer
+55c1d5600000-55c1d5621000 rw-p 00000000 00:00 0        [heap]
+7fa2c0000000-7fa2c0001000 rw-s 00000000 00:19 12       /dev/shm/aosp_shm (deleted)
+7ffe82000000-7ffe82021000 rw-p 00000000 00:00 0        [stack]`,
+      tip: 'Notice the difference in permission flags: rw-p means private (Copy-On-Write); rw-s means shared. If you mapped shared memory but see rw-p, you passed MAP_PRIVATE by mistake!',
+    },
+    {
+      name: '/proc/[pid]/fd & lsof (File Descriptor Inspection)',
+      desc: 'Verify which file descriptors, pipes, sockets, and shared memory handles a process holds open.',
+      command: 'ls -l /proc/$PID/fd\nlsof -p $PID',
+      output: `lrwx------ 1 dev dev 64 Jan 15 10:30 0 -> /dev/pts/1
+lrwx------ 1 dev dev 64 Jan 15 10:30 1 -> /dev/pts/1
+lrwx------ 1 dev dev 64 Jan 15 10:30 2 -> /dev/pts/1
+lrwx------ 1 dev dev 64 Jan 15 10:30 3 -> /dev/shm/aosp_shm
+lr-x------ 1 dev dev 64 Jan 15 10:30 4 -> pipe:[384910]`,
+      tip: 'Leaking file descriptors is one of the top causes of Android system daemon crashes. A process default limit is typically 1024 or 32768 descriptors; hitting the limit causes open() to fail with EMFILE (Too many open files).',
+    },
+  ]}
+/>
+
+---
+
+<DevGotcha
+  title="Phase 1 Systems Traps & Concurrency Pitfalls"
+  traps={[
+    {
+      name: 'The 0-Byte ftruncate SIGBUS Trap',
+      symptom: 'Your program calls shm_open() and mmap() without errors, but crashes instantly with "Bus error (core dumped)" (SIGBUS) the moment you read or write the pointer.',
+      cause: 'shm_open() creates a shared memory object with an initial size of 0 bytes. Calling mmap() reserves virtual address space, but because no physical file size was defined, the memory management unit triggers a bus error on first access.',
+      fix: 'Always invoke ftruncate(shm_fd, ALLOC_SIZE) immediately after shm_open() before calling mmap().',
+    },
+    {
+      name: 'Unintentional File Descriptor Leak Across fork()',
+      symptom: 'A spawned child process locks a listening port or file, preventing the parent or other instances from re-binding even after the parent restarts.',
+      cause: 'By default, POSIX file descriptors remain open in child processes across fork() and execve(). If you open a socket or database file and fork a child helper, the child inherits the file descriptor.',
+      fix: 'Always open file descriptors with the O_CLOEXEC flag (e.g. open(path, O_RDWR | O_CLOEXEC) or shm_open(name, O_RDWR | O_CLOEXEC)), or set fcntl(fd, F_SETFD, FD_CLOEXEC).',
+    },
+    {
+      name: 'The MAP_PRIVATE Shared Memory Mirage',
+      symptom: 'Process A writes messages to shared memory, but Process B continuously reads all zeros, even though both processes successfully mapped the same file.',
+      cause: 'Process A or B passed MAP_PRIVATE to mmap() instead of MAP_SHARED. MAP_PRIVATE creates a Copy-On-Write duplicate on the first write, decoupling it from the backing file and other processes.',
+      fix: 'Always pass MAP_SHARED in the flags argument when sharing memory across processes.',
+    },
+  ]}
+/>
+
+---
+
 ## Mastery Check
 
 <Checkpoint
@@ -533,6 +613,49 @@ Notice what happened at the kernel level:
     'Symptom: Child process modifications to shared memory are invisible to the parent. Cause: Passed MAP_PRIVATE instead of MAP_SHARED to mmap, resulting in Copy-On-Write private memory pages. Fix: Ensure flags contain MAP_SHARED.',
     'Symptom: Zombie processes accumulating in ps output after fork(). Cause: Parent process did not call waitpid() to reap terminated child process exit status. Fix: Implement a waitpid() loop or handle SIGCHLD with SA_NOCLDWAIT.',
   ]}
+/>
+
+<TrialErrorLab
+  title="Hands-on Lab: Trigger and Diagnose a SIGBUS Bus Error"
+  goal="Intentionally produce the classic 0-byte mmap crash, examine the signal with strace, and understand why the hardware MMU triggers SIGBUS."
+  experiment={`Create sigbus_test.c:
+
+#include <stdio.h>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <unistd.h>
+
+int main() {
+    int fd = shm_open("/sigbus_demo", O_RDWR | O_CREAT, 0666);
+    // Intentionally OMIT ftruncate(fd, 4096)!
+    
+    int *ptr = (int *)mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (ptr == MAP_FAILED) {
+        perror("mmap failed");
+        return 1;
+    }
+    
+    printf("mmap succeeded at %p, attempting to write...\\n", ptr);
+    *ptr = 42; // Hardware MMU triggers SIGBUS here!
+    
+    printf("Successfully wrote: %d\\n", *ptr);
+    return 0;
+}
+
+Compile and run:
+gcc sigbus_test.c -o sigbus_test -lrt
+./sigbus_test`}
+  expectedError={`mmap succeeded at 0x7fa2c0000000, attempting to write...
+Bus error (core dumped)`}
+  diagnosis="mmap() succeeded because the Linux kernel gladly reserved 4096 bytes in your virtual address space. However, because ftruncate was never called, the underlying shared memory file has a length of 0 bytes. When the CPU executes the store instruction (*ptr = 42), the CPU MMU generates a page fault. The Linux kernel page fault handler checks the backing file, sees that address 0 is beyond the file end (0 bytes), and signals SIGBUS (BUS_ADRERR) to terminate the offending thread."
+  fix={`Call ftruncate(fd, 4096) immediately after shm_open():
+
+int fd = shm_open("/sigbus_demo", O_RDWR | O_CREAT, 0666);
+if (ftruncate(fd, 4096) == -1) {
+    perror("ftruncate failed");
+    return 1;
+}
+int *ptr = (int *)mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);`}
 />
 
 ## Reward

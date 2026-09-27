@@ -20,6 +20,11 @@ import {
   DeepDive,
   CodeAnnotator,
   ConceptComparison,
+  DidYouKnow,
+  DevGotcha,
+  TrialErrorLab,
+  DebugToolkit,
+  VocabularyHelper,
 } from '@site/src/components/Unit';
 import {PhaseHeader} from '@site/src/components/PhaseHeader';
 import {CompleteButton} from '@site/src/components/Progress';
@@ -96,6 +101,14 @@ The starter code and automated test harnesses for this phase are provided in the
   ]}
 />
 
+<DidYouKnow title="Why Google Banned C++ Exceptions & RTTI in AOSP">
+  If you inspect <code>Android.bp</code> files across AOSP, you will notice <code>-fno-exceptions</code> and <code>-fno-rtti</code> enabled everywhere.
+  <br /><br />
+  <strong>Why?</strong> When a C++ program supports exceptions, the compiler generates hidden tables in the binary to trace stack frames during an error. This increases binary size by 15% to 20% across millions of lines of code. Even worse, stack unwinding has unpredictable execution latency, which causes frame drops in 120Hz display composition (SurfaceFlinger) and audible glitches in audio playback.
+  <br /><br />
+  Instead of exceptions, AOSP functions return explicit error codes (like <code>android::status_t</code>, <code>std::optional</code>, or <code>Result&lt;T&gt;</code>).
+</DidYouKnow>
+
 :::note Honest status of this page
 This phase was authored against a 64-bit Linux target (the same host the rest of
 the course requires, see Phase 0). The commands below are exact and runnable.
@@ -106,9 +119,9 @@ verbatim once captured - never paraphrased.
 
 ## Why this phase exists
 
-AOSP userspace is C++17/C++20. The Linux kernel is C in a distinct dialect: no C++ standard library (STL), manual memory management, and specific kernel architectural idioms.
+AOSP userspace is written in C++17 and C++20. The Linux kernel is written in C in a distinct <VocabularyHelper word="dialect" simple="A specific style or variation of a programming language with its own conventions" analogy="Like British English vs American English: the core words are the same, but slang, spelling, and phrasing differ." />: it has no C++ standard library (no `std::vector` or `std::string`), requires manual memory management, and uses specific kernel <VocabularyHelper word="idioms" simple="Common patterns or habits used by expert programmers to solve problems cleanly" analogy="Like saying 'break a leg' for good luck in theater; it is a standard community expression." />.
 
-If you jump straight into AOSP source code without mastering these two dialects, you will constantly fight language quirks instead of understanding Android architecture. Learning them here on a lightweight host setup ensures that when you see `android::sp<IFoo>`, `std::string_view`, or `container_of` in later phases, they feel natural.
+If you jump straight into AOSP source code without mastering these two styles, you will constantly fight language quirks instead of understanding Android architecture. Learning them here on a lightweight host setup ensures that when you see `android::sp<IFoo>`, `std::string_view`, or `container_of` in later phases, they feel natural and easy to read.
 
 ---
 
@@ -122,7 +135,7 @@ In C++, memory belongs to two primary zones:
 1. **The Stack**: Fast, automatic storage. Local variables are placed on the stack. When the enclosing curly braces `{}` end, stack memory is instantly reclaimed by moving the stack pointer.
 2. **The Heap**: Dynamic storage allocated at runtime via `new` or `malloc`. Heap allocations persist until explicitly destroyed. Forgetting to destroy them causes memory leaks; destroying them twice causes memory corruption (double free).
 
-**RAII (Resource Acquisition Is Initialization)** solves this dilemma: wrap the heap allocation inside a lightweight stack-allocated object. When the stack object leaves scope, its destructor runs and frees the heap memory automatically.
+<VocabularyHelper word="RAII (Resource Acquisition Is Initialization)" simple="A C++ pattern where you tie the lifetime of a resource (like heap memory or a file) to a stack variable so it is automatically cleaned up when the variable leaves scope." analogy="Like holding a hotel keycard: when you enter the room (variable created), the lights turn on; when you take the card out and leave (variable destroyed), the lights automatically turn off." /> solves this dilemma: wrap the heap allocation inside a lightweight stack-allocated object. When the stack object leaves scope, its destructor runs and frees the heap memory automatically.
 
 Do this: Create a header `owner.h` with a self-managing buffer:
 
@@ -674,6 +687,89 @@ nm alignment_probe | grep -E 'main|Optimized'`}
 
 ---
 
+<DebugToolkit
+  title="Phase -1 Systems & Binary Debugging Toolkit"
+  tools={[
+    {
+      name: 'readelf (ELF Inspection)',
+      desc: 'Inspect ELF binary headers, sections, symbols, and shared library dependencies without running the binary.',
+      command: 'readelf -h <binary>      # View ELF header (architecture, entry point, 32 vs 64-bit)\nreadelf -S <binary>      # List all sections (.text, .rodata, .data, .bss)\nreadelf -d <binary>      # Inspect dynamic section (find DT_NEEDED required shared libraries)\nreadelf -s <binary> | grep FUNC # List all function symbols exported or imported',
+      output: `Dynamic section at offset 0x2dd0 contains 28 entries:
+  Tag        Type                         Name/Value
+ 0x00000001 (NEEDED)                     Shared library: [libc.so]
+ 0x00000001 (NEEDED)                     Shared library: [liblog.so]`,
+      tip: 'When an AOSP binary crashes immediately on startup with "cannot locate symbol", run readelf -d and readelf -s to verify if your library dependencies actually export the expected symbol name.',
+    },
+    {
+      name: 'objdump (Disassembly & Machine Code)',
+      desc: 'Disassemble compiled machine code into human-readable assembly instructions to verify compiler optimizations.',
+      command: 'objdump -d -M intel -C <binary> | head -n 40\n# -d = disassemble\n# -M intel = modern Intel syntax (dest, src)\n# -C = demangle C++ symbol names into readable class::function()',
+      output: `0000000000001149 <main>:
+    1149: 55                    push   rbp
+    114a: 48 89 e5              mov    rbp,rsp
+    114d: 48 83 ec 10           sub    rsp,0x10
+    1151: 48 8d 3d a8 0e 00 00  lea    rdi,[rip+0xea8] # "Hello AOSP"
+    1158: e8 f3 fe ff ff        call   1050 <puts@plt>`,
+      tip: 'Always pass -C (demangle) when disassembling C++ binaries! Without it, you will see confusing mangled names like _ZN7android2spINS_7SurfaceEED1Ev instead of android::sp<android::Surface>::~sp().',
+    },
+    {
+      name: 'AddressSanitizer (ASan)',
+      desc: 'Compile-time instrumentation that detects buffer overflows, use-after-free, and stack corruption at runtime with zero guessing.',
+      command: 'clang++ -O1 -g -fsanitize=address -fno-omit-frame-pointer main.cpp -o main_asan\n./main_asan',
+      output: `=================================================================
+==18249==ERROR: AddressSanitizer: heap-use-after-free on address 0x602000000010
+READ of size 4 at 0x602000000010 thread T0
+    #0 0x4a1234 in main main.cpp:14
+    #1 0x7fa281 in __libc_start_main (/lib/x86_64-linux-gnu/libc.so.6+0x29d90)
+0x602000000010 is located 0 bytes inside of 4-byte region [0x602000000010,0x602000000014)
+freed by thread T0 here:
+    #0 0x49812b in operator delete(void*) (/usr/lib/clang/bin/clang+++0x49812b)
+    #1 0x4a1200 in main main.cpp:12`,
+      tip: 'In AOSP Android.bp, you can enable AddressSanitizer on any native service by simply adding sanitize: { address: true } to the module definition.',
+    },
+    {
+      name: 'GDB / LLDB (Interactive Debugger)',
+      desc: 'Step through native code, inspect CPU registers, and examine memory byte-by-byte.',
+      command: 'lldb ./my_binary\n(lldb) breakpoint set --name main\n(lldb) run\n(lldb) register read\n(lldb) memory read --size 4 --format x --count 4 $rsp\n(lldb) bt',
+      output: `* thread #1, name = 'my_binary', stop reason = breakpoint 1.1
+    frame #0: 0x0000555555555150 my_binary\`main at main.cpp:5
+   2   	int main() {
+   3   	    int x = 42;
+-> 4   	    return x;
+   5   	}`,
+      tip: 'In LLDB, use "gui" to switch into a full interactive ncurses terminal debugger with visual source code, locals, and stack frames.',
+    },
+  ]}
+/>
+
+---
+
+<DevGotcha
+  title="Phase -1 Native C/C++ Traps & Gotchas"
+  traps={[
+    {
+      name: 'The sp<T> Strong Pointer Circular Reference Leak',
+      symptom: 'Memory usage steadily climbs over hours or days; destructors for service objects are never called, even after closing sessions.',
+      cause: 'Object A holds an android::sp<B>, and Object B holds an android::sp<A>. Because both reference counts never drop to 0, neither object can ever be deleted.',
+      fix: 'Break the cycle by having the child or back-reference use android::wp<T> (Weak Pointer). When the child needs to call the parent, call wp.promote() to temporarily acquire a strong reference.',
+    },
+    {
+      name: 'Dangling std::string_view from Temporary Strings',
+      symptom: 'Intermittent garbage strings, weird unicode characters, or SIGSEGV crashes that only happen in release builds (-O2 / -O3).',
+      cause: 'std::string_view does not own memory; it is only a pointer and length (const char* and size). Constructing a string_view from a temporary std::string creates a pointer to memory that is immediately destroyed at the end of the line.',
+      fix: 'Never return std::string_view from a function creating a local std::string. Store the std::string in a variable that outlives the string_view, or return std::string by value (relying on Return Value Optimization / RVO).',
+    },
+    {
+      name: 'The volatile Multi-Threading Myth',
+      symptom: 'Race conditions, data corruption, or infinite loops on multi-core ARM CPUs, even though a shared flag was marked volatile.',
+      cause: 'In Java, volatile provides memory ordering and happens-before guarantees. In C and C++, volatile DOES NOT! It only tells the compiler not to optimize away reads/writes to memory-mapped hardware registers (MMIO). It emits NO CPU memory fences or atomic instructions.',
+      fix: 'Always use std::atomic<bool> or std::atomic<int> for cross-thread synchronization. Use std::memory_order_acquire and std::memory_order_release for lock-free coordination.',
+    },
+  ]}
+/>
+
+---
+
 ## Mastery Check
 
 <Checkpoint
@@ -714,6 +810,53 @@ nm alignment_probe | grep -E 'main|Optimized'`}
     'Symptom: sp<T> circular reference causes memory leak where destructors never run. Cause: Two objects hold strong references to each other via sp<T>. Fix: Break the reference cycle by converting one side of the association to an android::wp<T> weak pointer.',
     'Symptom: container_of returns garbage addresses or causes page fault. Cause: Passing the wrong member name or struct type to container_of, causing incorrect byte offset subtraction. Fix: Ensure the pointer and member name match the exact struct definition.',
   ]}
+/>
+
+<TrialErrorLab
+  title="Hands-on Lab: Catch a Dangling Pointer with AddressSanitizer"
+  goal="Intentionally produce an undefined memory bug, run AddressSanitizer, and read the exact crash report to diagnose the failure."
+  experiment={`Create a file named bug.cpp:
+
+#include <iostream>
+#include <string_view>
+#include <string>
+
+std::string_view get_greeting() {
+    std::string s = "Hello, AOSP Engineer!";
+    return s; // BUG: returning pointer to local stack string that dies immediately!
+}
+
+int main() {
+    std::string_view view = get_greeting();
+    std::cout << "Greeting is: " << view << std::endl;
+    return 0;
+}
+
+Compile and run with Clang AddressSanitizer:
+clang++ -O1 -g -fsanitize=address bug.cpp -o bug
+./bug`}
+  expectedError={`=================================================================
+==29482==ERROR: AddressSanitizer: stack-use-after-scope on address 0x7ffd9c00bfa0
+READ of size 21 at 0x7ffd9c00bfa0 thread T0
+    #0 0x498e21 in std::char_traits<char>::copy(...)
+    #1 0x498902 in main bug.cpp:12
+Address 0x7ffd9c00bfa0 is located in stack of thread T0 at offset 32 in frame
+    #0 0x498a4f in get_greeting() bug.cpp:5
+  This frame has 1 object(s):
+    [32, 64) 's' <== Memory access at offset 32 is inside this variable`}
+  diagnosis="AddressSanitizer inserted redzones around the local variable 's' on the stack. When get_greeting() returned, 's' went out of scope and was poisoned. When main() tried to read from view, AddressSanitizer detected the read into poisoned memory and halted execution with the exact line number where the object died (bug.cpp:5) and where it was accessed (bug.cpp:12)."
+  fix={`Change get_greeting() to return an owned std::string instead of std::string_view:
+
+std::string get_greeting() {
+    std::string s = "Hello, AOSP Engineer!";
+    return s; // Safe: moved or copied via RVO (Return Value Optimization)
+}
+
+int main() {
+    std::string text = get_greeting();
+    std::cout << "Greeting is: " << text << std::endl;
+    return 0;
+}`}
 />
 
 ## Reward

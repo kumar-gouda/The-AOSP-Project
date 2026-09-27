@@ -20,6 +20,11 @@ import {
   DeepDive,
   CodeAnnotator,
   ConceptComparison,
+  DidYouKnow,
+  DevGotcha,
+  TrialErrorLab,
+  DebugToolkit,
+  VocabularyHelper,
 } from '@site/src/components/Unit';
 import {PhaseHeader} from '@site/src/components/PhaseHeader';
 import {CompleteButton} from '@site/src/components/Progress';
@@ -98,6 +103,16 @@ Device drivers sit directly between hardware buses and userspace system calls. M
     },
   ]}
 />
+
+<DidYouKnow title="Why ARM Linux Adopted Device Trees (The Death of C Board Files)">
+  In PC architectures (x86_64), peripheral hardware is discovered dynamically via PCI enumeration or ACPI tables provided by the UEFI BIOS.
+  <br /><br />
+  <strong>The Early ARM Nightmare:</strong> In early ARM Linux (including Android 1.0 to 3.0), there was no discovery mechanism. Every single smartphone model required a giant, custom C file (like <code>arch/arm/mach-msm/board-passion.c</code>) hardcoding raw physical memory addresses, GPIO pin numbers, and IRQ interrupt vectors! In 2011, Linus Torvalds famously criticized the ARM tree, calling the proliferation of duplicate board files an unmaintainable disaster.
+  <br /><br />
+  <strong>The Device Tree Revolution:</strong> The Linux kernel mandated <strong>Device Trees (DTS/DTB)</strong>. Hardware configuration was decoupled from C code into declarative text files (<code>.dts</code>), which the bootloader compiles into binary blobs (<code>.dtb</code>) and passes in RAM to the kernel.
+  <br /><br />
+  <strong>The Android DTBO Innovation:</strong> Modern Android goes one step further: the base SoC device tree is stored in <code>dtb.img</code>, while individual hardware variations (different display panels, camera sensors, or battery PMICs) are applied dynamically at boot time as <strong>Device Tree Overlays (<code>dtbo.img</code>)</strong>!
+</DidYouKnow>
 
 ---
 
@@ -365,6 +380,65 @@ adb shell dmesg | grep -i "ACK custom patch active"`}
 
 ---
 
+<DebugToolkit
+  title="Phase 10.5 Linux Device Driver Diagnostic Toolkit"
+  tools={[
+    {
+      name: 'Device Tree sysfs Inspection',
+      desc: 'Verify that the kernel successfully parsed your device tree node and inspect property values in memory.',
+      command: '# Inspect active device tree nodes parsed in memory:\nadb shell ls -la /sys/firmware/devicetree/base/\nadb shell cat /sys/firmware/devicetree/base/foo_sensor@1000/compatible\n\n# Query device bindings on the platform bus:\nadb shell ls -l /sys/bus/platform/devices/ | grep -i foo',
+      output: `acme,foo-sensor
+lrwxrwxrwx 1 root root 0 Jan 15 10:30 1000.foo_sensor -> ../../../devices/platform/1000.foo_sensor
+lrwxrwxrwx 1 root root 0 Jan 15 10:30 driver -> ../../../bus/platform/drivers/foo_driver`,
+      tip: 'If /sys/bus/platform/devices/1000.foo_sensor exists but the "driver" symlink is missing, your device tree node was parsed successfully, but the driver\'s compatible string did not match.',
+    },
+    {
+      name: '/proc/interrupts & IRQ Monitoring',
+      desc: 'Verify whether hardware interrupts are firing and reaching your driver\'s Interrupt Service Routine (ISR).',
+      command: 'adb shell cat /proc/interrupts | grep -i foo',
+      output: ` 42:       1402          0          0          0     GICv3  42 Level     foo_sensor`,
+      tip: 'The counter (1402) shows the number of hardware interrupts delivered to CPU 0. If the counter remains 0 while you touch or move the sensor, the issue is hardware wiring or missing pull-up resistors in the device tree pinctrl.',
+    },
+    {
+      name: 'Character Device Node Verification',
+      desc: 'Confirm character device registration, major/minor allocation, and devtmpfs node creation.',
+      command: 'adb shell cat /proc/devices | grep -i foo\nadb shell ls -l /dev/foo*',
+      output: `Character devices:
+242 foo_device
+crw-rw---- 1 root system 242, 0 Jan 15 10:30 /dev/foo_sensor`,
+      tip: 'Major number 242 identifies your driver to the VFS; minor number 0 identifies the specific sensor instance.',
+    },
+  ]}
+/>
+
+---
+
+<DevGotcha
+  title="Phase 10.5 Device Driver Traps & Gotchas"
+  traps={[
+    {
+      name: 'The Compatible String Casing & Punctuation Trap',
+      symptom: 'The driver module loads cleanly without errors, but probe() is never invoked and /dev/foo is never created.',
+      cause: 'The compatible property in the DTS node has a typo or casing difference (e.g. "acme,foo_sensor" vs "acme,foo-sensor") compared to the driver\'s struct of_device_id table.',
+      fix: 'Cross-check the exact spelling character-by-character. Ensure the DTS node status is set to "okay" (not "disabled").',
+    },
+    {
+      name: 'The ioctl ENOTTY Fallthrough Trap',
+      symptom: 'Userspace calls ioctl() with valid parameters, but receives -1 with errno 25 (ENOTTY: Inappropriate ioctl for device).',
+      cause: 'The ioctl number generation macro (_IOR, _IOW, _IOWR) computed a different 32-bit command number because of mismatched data structure size or magic byte differences between the header and driver.',
+      fix: 'Share the exact same ioctl header between the kernel driver and userspace HAL, and verify command definitions with _IOR(\'F\', 1, struct foo_data).',
+    },
+    {
+      name: 'Missing wake_up_interruptible() in Interrupt Handlers',
+      symptom: 'Userspace poll() or select() calls on /dev/foo block forever, even though hardware interrupts are actively firing.',
+      cause: 'The driver\'s interrupt handler read hardware data, but forgot to call wake_up_interruptible(&dev->wait_queue) to notify the kernel scheduler that data is ready for reading.',
+      fix: 'Always invoke wake_up_interruptible(&dev->inq) after writing new data to the driver\'s circular buffer.',
+    },
+  ]}
+/>
+
+---
+
 ## Checkpoint
 
 <Checkpoint
@@ -392,6 +466,44 @@ adb shell dmesg | grep -i "ACK custom patch active"`}
     'Symptom: ioctl returns -1 with errno ENOTTY (Inappropriate ioctl for device). Cause: The ioctl command magic or sequence number is not handled in the switch statement. Fix: Ensure default case returns -ENOTTY and verify _IOR magic character.',
     'Symptom: System freezes or reboots when reading /dev/foo_device. Cause: Calling mutex_lock() inside an atomic context or interrupt handler, or dereferencing a null private_data pointer. Fix: Check dmesg for "scheduling while atomic" warnings.',
   ]}
+/>
+
+<TrialErrorLab
+  title="Hands-on Lab: Diagnose a Driver Probe Mismatch via sysfs"
+  goal="Intentionally create a Device Tree compatible string mismatch, observe how the Linux platform bus reacts, and fix the binding using sysfs evidence."
+  experiment={`In your driver source, change the compatible string:
+
+// In foo_driver.c:
+static const struct of_device_id foo_of_match[] = {
+    // Intentionally create a mismatch:
+    { .compatible = "acme,foo-sensor-v2" }, 
+    { /* sentinel */ }
+};
+MODULE_DEVICE_TABLE(of, foo_of_match);
+
+// But in your Device Tree (DTS), the node remains:
+// compatible = "acme,foo-sensor";
+
+Rebuild and load the module:
+insmod foo_driver.ko
+
+Check if the driver bound to the device:
+ls -l /sys/bus/platform/devices/*foo*`}
+  expectedError={`drwxr-xr-x 3 root root 0 Jan 15 10:30 /sys/bus/platform/devices/1000.foo_sensor
+// Notice: no "driver" symlink inside this folder!
+// And /dev/foo_sensor was never created.`}
+  diagnosis="When the Linux kernel boots, it creates a platform_device for every device tree node. However, the driver's probe() method is only invoked when the platform bus finds an exact byte-for-byte match between the device's compatible string and the driver's of_device_id table. Because of the mismatch, the kernel never attached the driver to the device."
+  fix={`Inspect the exact string expected by the hardware node:
+cat /sys/bus/platform/devices/1000.foo_sensor/of_node/compatible
+# Outputs: "acme,foo-sensor"
+
+Align the compatible string in foo_driver.c:
+static const struct of_device_id foo_of_match[] = {
+    { .compatible = "acme,foo-sensor" },
+    { /* sentinel */ }
+};
+
+Reload the module: the driver symlink appears and /dev/foo_sensor is instantly created!`}
 />
 
 ---

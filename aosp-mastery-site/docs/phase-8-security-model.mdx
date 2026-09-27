@@ -21,6 +21,11 @@ import {
   DeepDive,
   CodeAnnotator,
   ConceptComparison,
+  DidYouKnow,
+  DevGotcha,
+  TrialErrorLab,
+  DebugToolkit,
+  VocabularyHelper,
 } from '@site/src/components/Unit';
 import {PhaseHeader} from '@site/src/components/PhaseHeader';
 import {CompleteButton} from '@site/src/components/Progress';
@@ -101,6 +106,16 @@ SELinux and platform security are often viewed as intimidating, but they follow 
     },
   ]}
 />
+
+<DidYouKnow title="Why Android Uses SELinux MAC to Defeat Root Exploits">
+  In traditional Linux and early Android (Android 1.0 to 4.2), security depended entirely on standard Unix permissions (DAC: Discretionary Access Control).
+  <br /><br />
+  <strong>The Fatal Flaw of Root:</strong> If an attacker found a buffer overflow in any system service running as root (such as <code>vold</code>, <code>netd</code>, or <code>mediaserver</code>), the attacker instantly gained unlimited control over the device. Root could read user passwords, dump raw camera feeds, listen to the microphone, and wipe the flash storage.
+  <br /><br />
+  <strong>The Stagefright Lesson:</strong> In 2015, security researchers discovered "Stagefright", a series of bugs where a malicious MMS video could execute code inside <code>mediaserver</code> without user interaction.
+  <br /><br />
+  <strong>The SELinux Defense (MAC):</strong> Starting in Android 5.0, Google enforced SELinux Mandatory Access Control across the entire platform. Under SELinux, permissions are tied to <strong>domains, not user IDs</strong>. Even if an attacker gains root code execution inside <code>mediaserver</code> or a camera HAL, SELinux prevents that process from opening user photos, reading browser cookies, or executing shell binaries! The exploit is completely quarantined.
+</DidYouKnow>
 
 ---
 
@@ -349,6 +364,65 @@ SELinux protects userspace at runtime, but what protects SELinux policy files on
 
 ---
 
+<DebugToolkit
+  title="Phase 8 SELinux & Platform Security Diagnostic Toolkit"
+  tools={[
+    {
+      name: 'Live AVC Denial Capture (dmesg & logcat)',
+      desc: 'Capture real-time Access Vector Cache denials as they occur in the kernel.',
+      command: '# Live tail kernel audit messages:\nadb shell dmesg -w | grep -i "avc: denied"\n\n# Or filter logcat for audit logs:\nadb logcat -b events -s auditd',
+      output: `[  142.105] type=1400 audit(1716982000.410:12): avc: denied { read } for pid=18402 comm="vendor_foo" name="temp" dev="sysfs" ino=1420 scontext=u:r:vendor_foo:s0 tcontext=u:object_r:sysfs:s0 tclass=file permissive=0`,
+      tip: 'When testing a new daemon, run "adb shell setenforce 0" temporarily to capture ALL denied permissions in one run without the daemon aborting on the first failure.',
+    },
+    {
+      name: 'Security Context Auditing (ls -Z & ps -Z)',
+      desc: 'Inspect the four-part SELinux label assigned to active processes, file nodes, and Binder tokens.',
+      command: '# Check process domain label:\nadb shell ps -eZ | grep -E "system_server|foo"\n\n# Check filesystem node labels:\nadb shell ls -laZ /vendor/bin/hw/ /data/vendor/foo/',
+      output: `u:r:system_server:s0             system        1402  ...  system_server
+u:r:hal_foo_default:s0           vendor_foo    18402 ...  /vendor/bin/hw/vendor_foo
+-rwxr-xr-x 1 root shell u:object_r:hal_foo_default_exec:s0 /vendor/bin/hw/vendor_foo
+drwxrwx--- 2 foo  foo   u:object_r:vendor_foo_data_file:s0 /data/vendor/foo/`,
+      tip: 'If a file displays "u:object_r:unlabeled:s0", SELinux will deny almost all operations in Enforcing mode! Fix it by executing restorecon.',
+    },
+    {
+      name: 'audit2allow (SELinux Rule Generator)',
+      desc: 'Feed captured AVC denial logs into audit2allow to inspect what policy rules the kernel is requesting.',
+      command: 'adb shell dmesg | grep avc > denials.log\naudit2allow -i denials.log',
+      output: `#============= vendor_foo ==============
+allow vendor_foo sysfs_thermal:file { open read getattr };`,
+      tip: 'WARNING: Never blindly paste audit2allow output into your .te files! If audit2allow suggests "allow vendor_foo sysfs:file write", you will violate neverallow rules and break the build. Always create a specific granular type.',
+    },
+  ]}
+/>
+
+---
+
+<DevGotcha
+  title="Phase 8 Security & SELinux Traps & Gotchas"
+  traps={[
+    {
+      name: 'The audit2allow neverallow Violation Trap',
+      symptom: 'Build fails during policy compilation with: "libsepol.report_failure: neverallow violated by allow vendor_foo system_file:file write".',
+      cause: 'You used audit2allow output directly. AOSP policy enforces strict neverallow assertions preventing vendor daemons from writing to generic system files or creating raw AF_INET sockets.',
+      fix: 'Do not grant broad permissions to generic types. Create a specific vendor type (e.g. "vendor_data_file"), label your directory in file_contexts, and grant access only to your custom type.',
+    },
+    {
+      name: 'The Permissive Mode Blind Spot',
+      symptom: 'Your feature works flawlessly on your development build, but crashes immediately with Permission Denied on user/production builds.',
+      cause: 'Your workstation device was running with "getenforce" returning "Permissive". In Permissive mode, AVC denials are logged to dmesg but NEVER blocked. On production user builds, SELinux is permanently locked in Enforcing mode.',
+      fix: 'Always run "adb shell setenforce 1" and verify that your feature executes cleanly with zero AVC denials before declaring completion.',
+    },
+    {
+      name: 'The Unlabeled File Fallback (u:object_r:unlabeled:s0)',
+      symptom: 'Your daemon crashes with EACCES (Permission Denied) when opening its config file, even though file permissions are 0777.',
+      cause: 'The file or directory was created manually via adb or a shell script without being defined in file_contexts, causing it to inherit the "unlabeled" security context.',
+      fix: 'Add the path pattern to file_contexts and execute "restorecon -Rv <path>" to apply the correct label.',
+    },
+  ]}
+/>
+
+---
+
 ## Checkpoint
 
 <Checkpoint
@@ -376,6 +450,36 @@ SELinux protects userspace at runtime, but what protects SELinux policy files on
     'Symptom: Daemon works when getenforce returns Permissive, but crashes or fails to start when getenforce returns Enforcing. Cause: Missing allow rules or missing domain transition from init. Fix: Inspect dmesg | grep avc and confirm restorecon was applied to the binary.',
     'Symptom: Service fails to register with servicemanager: "Permission denied". Cause: Missing add_service() or find() rules in service_contexts and .te policy files. Fix: Add the service string to service_contexts and declare add_service(vendor_foo, hal_foo_service) in your .te file.',
   ]}
+/>
+
+<TrialErrorLab
+  title="Hands-on Lab: Decode and Fix an AVC Denial in Enforcing Mode"
+  goal="Intentionally produce an SELinux AVC denial, decode every field in the log line, and write the minimal secure policy fix."
+  experiment={`Switch SELinux to Enforcing mode:
+adb shell setenforce 1
+
+Trigger an unprivileged sysfs read from your vendor daemon:
+adb shell /vendor/bin/hw/vendor_foo --read-thermal
+
+Capture the resulting kernel denial:
+adb shell dmesg | grep "avc: denied"`}
+  expectedError={`type=1400 audit(1716982000.410:12): avc: denied { read } for pid=18402 comm="vendor_foo" name="temp" dev="sysfs" ino=1420 scontext=u:r:vendor_foo:s0 tcontext=u:object_r:sysfs:s0 tclass=file permissive=0`}
+  diagnosis={`Let's decode the AVC log line piece by piece:
+- { read }: The specific kernel operation that was blocked.
+- comm="vendor_foo": The command name of the executable.
+- scontext=u:r:vendor_foo:s0: Source Context (the domain of the process trying to read).
+- tcontext=u:object_r:sysfs:s0: Target Context (the current label of the file being read).
+- tclass=file: Target Class (the file object type).
+- permissive=0: 0 means Enforcing mode (the kernel killed/blocked the operation).`}
+  fix={`1. Do NOT allow vendor_foo to read generic sysfs! Instead, relabel the thermal sensor node in genfs_contexts:
+genfscon sysfs /devices/virtual/thermal/thermal_zone0 u:object_r:sysfs_thermal:s0
+
+2. In vendor_foo.te, grant access ONLY to the specific thermal type:
+allow vendor_foo sysfs_thermal:file { read open getattr };
+
+3. Rebuild and verify:
+m sepolicy && adb shell getenforce && adb shell /vendor/bin/hw/vendor_foo --read-thermal
+# The denial disappears and the read succeeds cleanly!`}
 />
 
 ---

@@ -20,6 +20,11 @@ import {
   DeepDive,
   CodeAnnotator,
   ConceptComparison,
+  DidYouKnow,
+  DevGotcha,
+  TrialErrorLab,
+  DebugToolkit,
+  VocabularyHelper,
 } from '@site/src/components/Unit';
 import {PhaseHeader} from '@site/src/components/PhaseHeader';
 import {CompleteButton} from '@site/src/components/Progress';
@@ -98,6 +103,18 @@ Shipping code in modern Android requires mastering modern modularity and memory 
     },
   ]}
 />
+
+<DidYouKnow title="Why Google Rewrote Android Keystore & Bluetooth in Rust">
+  According to official Android security telemetry between 2014 and 2020, over <strong>70% of all severe security vulnerabilities</strong> in Android were memory safety flaws in C and C++ (buffer overflows, use-after-free, and race conditions).
+  <br /><br />
+  <strong>The Strategic Pivot:</strong> Starting in Android 12, Google introduced first-class support for <strong>Rust</strong> in AOSP. Rather than attempting to patch millions of lines of legacy C++, Google prioritized rewriting the most high-risk, attack-facing components in Rust:
+  <ul>
+    <li><code>Keystore2</code> (<code>/system/bin/keystore2</code>): Android's master cryptographic key management daemon.</li>
+    <li><code>Fluoride / Gabeldorsche</code>: Android's core Bluetooth stack that parses untrusted over-the-air radio packets.</li>
+    <li><code>crosvm / Microdroid</code>: The Android Virtualization Framework hypervisor.</li>
+  </ul>
+  <strong>The Result:</strong> In the rewritten components, memory corruption vulnerabilities dropped to <strong>zero</strong>. Because Rust compiles to bare-metal machine code without a garbage collector or Java VM overhead, memory consumption and latency were equal to or better than C++!
+</DidYouKnow>
 
 ---
 
@@ -401,6 +418,71 @@ Before shipping any major platform capability, a lead AOSP architect must map it
 
 ---
 
+---
+
+<DebugToolkit
+  title="Phase 13 Production Hardening Diagnostic Toolkit"
+  tools={[
+    {
+      name: 'deapexer & apexd (APEX Container Inspection)',
+      desc: 'Extract, inspect, and verify the loopback filesystems and shared libraries inside modern APEX modules.',
+      command: '# Inspect package manifest inside an APEX:\n$ANDROID_HOST_OUT/bin/deapexer list com.android.runtime.apex\n\n# Query active APEX mountpoints on device:\nadb shell cmd -w apexservice getActivePackages | grep -E "name|path"',
+      output: `Name: com.android.runtime
+Version: 340000000
+Path: /system/apex/com.android.runtime.apex
+MountPath: /apex/com.android.runtime`,
+      tip: 'To debug why an updated APEX failed to mount and triggered rollback, check logcat -s apexd. apexd logs cryptographic signature verification and loopback ext4 mount status.',
+    },
+    {
+      name: 'Trade Federation (Tradefed CLI Test Execution)',
+      desc: 'Execute host-orchestrated end-to-end compatibility tests across ADB.',
+      command: '# Run Tradefed directly or through atest with verbose logs:\natest MyProductionHostTest --verbose\n\n# Or launch interactive Tradefed console:\n$ANDROID_HOST_OUT/bin/tradefed.sh\ntf> run MyProductionHostTest',
+      output: `arm64-v8a MyProductionHostTest
+------------------------------
+[1/1] com.android.tests.MyProductionHostTest#testServiceStabilityUnderLoad: PASSED (14.2s)
+All tests passed!`,
+      tip: 'Trade Federation is the exact harness used by Google for official CTS (Compatibility Test Suite) certification. If a test passes in atest/Tradefed, it is ready for production submission.',
+    },
+    {
+      name: 'dumpsys SurfaceFlinger --latency (Jank Profiling)',
+      desc: 'Measure frame presentation timestamps and isolate 120Hz display drops.',
+      command: '# Query refresh period and last 128 frame presentation timestamps:\nadb shell dumpsys SurfaceFlinger --latency SurfaceView',
+      output: `16666666
+1420918029104 1420918042100 1420918044910
+1420918045812 1420918058912 1420918061200`,
+      tip: 'The first line (16666666 ns = 16.6ms) is the display refresh period (60Hz; 8333333 ns for 120Hz). Subtracting column 1 from column 2 gives the exact compositing latency for every frame.',
+    },
+  ]}
+/>
+
+---
+
+<DevGotcha
+  title="Phase 13 Production Hardening Traps & Gotchas"
+  traps={[
+    {
+      name: 'The Early Init vs. APEX Mount Race Condition',
+      symptom: 'A daemon started in "on early-init" or "on init" crashes immediately with "dlopen failed: library \\"libc.so\\" not found".',
+      cause: 'APEX containers (including the Bionic runtime APEX com.android.runtime) are not mounted until the "post-fs-data" boot stage. Early daemons cannot load libraries from /apex/.',
+      fix: 'Early native daemons must link against bootstrap libraries installed directly in /system/bin/bionic/ or mark recovery_available: true.',
+    },
+    {
+      name: 'The Third-Party Rust Crate Visibility Trap',
+      symptom: 'Cargo.toml dependency compiles on host Linux, but Soong fails with: "error: cannot find crate \'my_crate\'".',
+      cause: 'AOSP builds are hermetic and cannot access crates.io over the network. Every Rust dependency must be checked into external/rust/crates/ with an autogenerated Android.bp.',
+      fix: 'Use the AOSP cargo2android or cargo_embargo tool to generate compliant Android.bp module files for required crates in the external/ directory.',
+    },
+    {
+      name: 'The Gralloc dma-buf File Descriptor Leak',
+      symptom: 'Camera preview or video playback works for 10 minutes, then stutters and crashes with "out of graphic memory" or kernel CMA exhaustion.',
+      cause: 'GraphicBuffer handles created by camera/video producers wrap Linux dma-buf file descriptors. Forgetting to close native handles in C++ leaves anonymous memory pinned in RAM permanently.',
+      fix: 'Always pair native_handle_clone() with native_handle_close() and native_handle_delete(), or wrap handles in std::unique_ptr with custom deleters.',
+    },
+  ]}
+/>
+
+---
+
 ## Checkpoint
 
 <Checkpoint
@@ -428,6 +510,36 @@ Before shipping any major platform capability, a lead AOSP architect must map it
     'Symptom: rust_binary fails to link with "undefined reference to __android_log_print". Cause: Missing dependency on Bionic logging library in Android.bp. Fix: Add "liblog_rust" and "libandroid_logger" to the rustlibs list.',
     'Symptom: Tradefed test fails with "DeviceNotAvailableException: Device failed to boot within timeout". Cause: Custom init service or HAL blocked the boot sequence, preventing boot_completed from firing. Fix: Inspect dmesg and logcat -b main for blocking synchronous calls.',
   ]}
+/>
+
+<TrialErrorLab
+  title="Hands-on Lab: Dissect an APEX Container with deapexer"
+  goal="Extract and inspect the internal ext4 loopback filesystem of an Android APEX container on your workstation."
+  experiment={`Locate an APEX file in your build output or pull from device:
+adb pull /system/apex/com.android.runtime.apex /tmp/
+
+Inspect the payload without mounting:
+$ANDROID_HOST_OUT/bin/deapexer list /tmp/com.android.runtime.apex
+
+Extract the complete internal filesystem:
+$ANDROID_HOST_OUT/bin/deapexer extract /tmp/com.android.runtime.apex /tmp/runtime_extracted/
+ls -lh /tmp/runtime_extracted/bin/ /tmp/runtime_extracted/lib64/bionic/`}
+  expectedError={`apex_manifest.pb
+bin/linker
+bin/linker64
+lib64/bionic/libc.so
+lib64/bionic/libm.so
+lib64/bionic/libdl.so`}
+  diagnosis="An APEX file is an Android Pony EXpress archive. Under the hood, it contains a signed ZIP container encapsulating an ext4 or erofs raw disk image (apex_payload.img). At boot time, apexd mounts this payload image to a dedicated loop device (/dev/block/loopX) at /apex/<name>, providing read-only access to immutable system libraries with instant rollback capability."
+  fix={`To create your own APEX module, declare an apex stanza in Android.bp:
+
+apex {
+    name: "com.acme.my_service",
+    manifest: "apex_manifest.json",
+    file_contexts: ":com.acme.my_service-file_contexts",
+    key: "com.acme.my_service.key",
+    binaries: ["my_rust_service"],
+}`}
 />
 
 ---

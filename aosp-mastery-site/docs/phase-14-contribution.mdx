@@ -20,6 +20,11 @@ import {
   DeepDive,
   CodeAnnotator,
   ConceptComparison,
+  DidYouKnow,
+  DevGotcha,
+  TrialErrorLab,
+  DebugToolkit,
+  VocabularyHelper,
 } from '@site/src/components/Unit';
 import {PhaseHeader} from '@site/src/components/PhaseHeader';
 import {CompleteButton} from '@site/src/components/Progress';
@@ -97,6 +102,13 @@ AOSP does not use GitHub Pull Requests. It uses **Gerrit Code Review**, a patch-
       aospContext: 'A patch requires both Code-Review +2 and Verified +1 (from Google TreeHugger automated continuous integration) before it can be submitted.',
     },
   ]}
+/>
+
+<DidYouKnow
+  title="Why Google Built TreeHugger and Banned Merge Commits in AOSP"
+  fact="Android has over 1,000 separate Git repositories connected by the repo tool. If developers pushed merge commits, the commit history across 1,000 repositories would turn into a tangled, un-bisectable 'railroad track' nightmare. Gerrit enforces strict linear rebasing so every commit can be cherry-picked, bisected, or reverted in isolation."
+  engineeringReason="Google created 'TreeHugger'—an automated verification bot running on massive Google Borg/GKE clusters. When you run `repo upload`, TreeHugger spins up headless Cuttlefish virtual devices, applies your patch set, compiles the targeted modules, and runs CTS/VTS regression suites before any human lead engineer spends time reviewing it. If TreeHugger detects a build break or test regression, it automatically casts a 'Verified -1' vote and rejects your patch."
+  realDeviceContext="Because AOSP is pulled down by hundreds of OEMs (Samsung, Xiaomi, Motorola, Sony), an unvetted regression in frameworks/base or bionic would break nightly builds worldwide within hours. The combination of Gerrit Change-Ids, TreeHugger pre-submit testing, and linear git history is what keeps a 250-million-line codebase stable."
 />
 
 ---
@@ -286,6 +298,68 @@ Run this self-review checklist before typing `repo upload`:
 
 ---
 
+<DebugToolkit
+  title="Phase 14 Git & Gerrit Diagnostic Toolkit"
+  tools={[
+    {
+      name: "git log --pretty=fuller -n 1",
+      command: "git log --pretty=fuller -n 1",
+      whatItDoes: "Displays author date, commit date, author name, committer, and full footer including Change-Id.",
+      whenToUse: "Verify that your Change-Id footer is placed correctly at the very bottom and that your author email matches your registered Gerrit Google account."
+    },
+    {
+      name: "repo upload --dry-run",
+      command: "repo upload --dry-run .",
+      whatItDoes: "Simulates the Gerrit patch upload without transmitting commits over the network.",
+      whenToUse: "Check which branch, remote, and commit hashes repo intends to upload to android-review.googlesource.com before actually broadcasting them."
+    },
+    {
+      name: "git rebase -i aosp/main",
+      command: "git fetch aosp && git rebase -i aosp/main",
+      whatItDoes: "Interactively squashes, rewinds, or rebases your feature branch directly onto the tip of Google upstream main.",
+      whenToUse: "Keep your patch series linear and resolve upstream merge conflicts locally before pushing to Gerrit."
+    },
+    {
+      name: "cs.android.com search filters",
+      command: "repo:^platform/frameworks/base file:^services/core class:ActivityManagerService",
+      whatItDoes: "Leverages Kythe compiler semantic indexing to jump straight into source declarations, callers, and historical Gerrit CLs.",
+      whenToUse: "Find the original Gerrit review and commit rationale when modifying any complex Android system service."
+    }
+  ]}
+/>
+
+<DevGotcha
+  title="Phase 14 Gerrit & Contribution Traps & Gotchas"
+  traps={[
+    {
+      trap: "Committing without the Gerrit commit-msg hook installed",
+      symptom: "Running repo upload fails immediately with: fatal: commit <hash>: missing Change-Id in footer.",
+      why: "Gerrit requires every reviewable commit to have a persistent Change-Id string in the git commit message footer. If the hook is missing from .git/hooks/commit-msg, git doesn't generate this line.",
+      fix: "Install the official hook: curl -Lo .git/hooks/commit-msg https://android-review.googlesource.com/tools/hooks/commit-msg && chmod +x .git/hooks/commit-msg. Then run git commit --amend --no-edit to automatically generate the Change-Id!"
+    },
+    {
+      trap: "Accidentally altering or deleting the Change-Id during rebase",
+      symptom: "repo upload creates an entirely new review URL on Gerrit instead of updating Patch Set 2 on your existing review thread.",
+      why: "Gerrit matches incoming commits to existing review threads solely by the Change-Id: I<hash> string. If you edit or regenerate this line, Gerrit treats it as an independent new change.",
+      fix: "Open your original Gerrit review page, copy the Change-Id: I... line from the web UI, run git commit --amend, and paste the exact original Change-Id back into the footer."
+    },
+    {
+      trap: "Vague or missing 'Test:' tags in commit message",
+      symptom: "TreeHugger or the Android maintainer rejects the commit with: 'Needs Test tag' or 'Please specify concrete test reproduction steps'.",
+      why: "Google engineering rules mandate that all commits state exactly how the change was verified (e.g. Test: atest FrameworksServicesTests:DevicePolicyManagerTest).",
+      fix: "Always write concrete, executable test commands in the commit body: Test: m -j && atest CtsGraphicsTestCases or Test: Manual flash on Pixel 8 and boot verification."
+    },
+    {
+      trap: "Creating a Git Merge Commit on an AOSP branch",
+      symptom: "git push fails with [remote rejected] HEAD -> refs/for/main (prohibited by Gerrit: not permitted to create merge commit).",
+      why: "AOSP strictly forbids diamond merge commits to preserve clean, bisectable git history.",
+      fix: "Never run git merge. Always run git fetch aosp && git rebase aosp/main. If merge commits already exist, use git rebase -i to drop them."
+    }
+  ]}
+/>
+
+---
+
 ## Checkpoint
 
 <Checkpoint
@@ -313,6 +387,19 @@ Run this self-review checklist before typing `repo upload`:
     'Symptom: repo upload generates an entirely new change URL instead of updating the existing review. Cause: The Change-Id was accidentally modified or removed during an interactive rebase. Fix: Copy the original Change-Id from Gerrit and paste it into the commit message via git commit --amend.',
     'Symptom: Git push rejected with "prohibited by Gerrit: not permitted to create merge commit". Cause: A git merge was performed instead of a git rebase. Fix: Run git rebase -i aosp/main to eliminate merge commits and produce a linear commit history.',
   ]}
+/>
+
+<TrialErrorLab
+  title="Hands-on Lab: Fix a Missing Change-Id Rejection via git commit --amend"
+  goal="Intentionally create a commit without a Gerrit Change-Id, trigger the fatal rejection on upload, install the hook, and amend the commit without losing changes."
+  experiment="Create a temporary git repository or branch, disable the commit-msg hook, author a commit with git commit -m 'Test commit', and attempt to push to refs/for/main."
+  expectedError={`fatal: commit 3a89e1...: missing Change-Id in footer
+hint: To prevent this error, install the hook:
+hint:   curl -Lo .git/hooks/commit-msg https://android-review.googlesource.com/tools/hooks/commit-msg
+hint: and then run:
+hint:   git commit --amend --no-edit`}
+  diagnosis="Gerrit rejects any commit missing the Change-Id footer tag because it cannot identify whether this commit is a new change or an iteration of an existing review."
+  fix="Download the commit-msg hook script into .git/hooks/, make it executable with chmod +x, and execute git commit --amend --no-edit. Inspect git log -n 1 to confirm the new Change-Id line is present in the footer."
 />
 
 ---

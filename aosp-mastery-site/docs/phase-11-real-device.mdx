@@ -20,6 +20,11 @@ import {
   DeepDive,
   CodeAnnotator,
   ConceptComparison,
+  DidYouKnow,
+  DevGotcha,
+  TrialErrorLab,
+  DebugToolkit,
+  VocabularyHelper,
 } from '@site/src/components/Unit';
 import {PhaseHeader} from '@site/src/components/PhaseHeader';
 import {CompleteButton} from '@site/src/components/Progress';
@@ -98,6 +103,16 @@ Transitioning from emulators to physical silicon requires understanding how flas
     },
   ]}
 />
+
+<DidYouKnow title="Why Android Created A/B Slots (The End of Bricked Devices)">
+  In early Android (Android 1.0 to 6.0), applying a system update was terrifying.
+  <br /><br />
+  <strong>The Death of Recovery Flashing:</strong> An update required rebooting the entire phone into a special recovery OS (<code>recovery.img</code>). The recovery program wiped the active <code>/system</code> partition block-by-block and extracted the new OS. If the battery died, if the USB cable detached, or if the update package was subtly corrupted, the operating system was wiped clean with no fallback—the phone was a permanent paperweight!
+  <br /><br />
+  <strong>The Seamless A/B Solution (Android 7.0+):</strong> Google duplicated all boot-critical partitions into two mirrored slots: <strong>Slot A and Slot B</strong> (e.g. <code>boot_a</code>/<code>boot_b</code>, <code>system_a</code>/<code>system_b</code>).
+  <br /><br />
+  When an update arrives, Android installs it in the background to the <em>inactive slot</em> while you continue using apps on the active slot. When you reboot, the bootloader switches slots. If the new slot fails to boot 3 times, the hardware bootloader automatically reverts to the previous working slot! Bricking customer devices became virtually impossible.
+</DidYouKnow>
 
 ---
 
@@ -303,6 +318,73 @@ fastboot -w update image-shiba-*.zip`}
 
 ---
 
+---
+
+<DebugToolkit
+  title="Phase 11 Fastboot & Hardware Diagnostic Toolkit"
+  tools={[
+    {
+      name: 'fastboot getvar all (Hardware Parameter Dump)',
+      desc: 'Query all hardware, partition, and bootloader state variables exposed by the device over USB.',
+      command: 'fastboot getvar all 2>&1 | grep -E "unlocked|slot|partition-size:super|battery"',
+      output: `(bootloader) unlocked: yes
+(bootloader) current-slot: a
+(bootloader) has-slot:boot: yes
+(bootloader) partition-size:super: 0x200000000 (8192 MB)
+(bootloader) battery-soc-ok: yes`,
+      tip: 'Before flashing anything, always run "fastboot getvar battery-soc-ok". Flashing images with low battery (< 20%) can cause sudden power loss during write operations, damaging flash memory blocks.',
+    },
+    {
+      name: 'Slot Control & fastbootd Switching',
+      desc: 'Query active slot, force boot to a specific slot, and enter userspace fastbootd.',
+      command: '# Query current slot:\nfastboot getvar current-slot\n\n# Force active slot switch to B:\nfastboot --set-active=b\n\n# Enter userspace fastbootd for dynamic partition flashing:\nfastboot reboot fastboot',
+      output: `Setting current slot to 'b'...
+Rebooting into fastbootd...
+<waiting for any device>
+[fastbootd screen appears on device display]`,
+      tip: 'Remember: firmware bootloader fastboot flashes physical partitions (boot, vbmeta, super). Fastbootd (userspace) is required to flash logical partitions (system, vendor, product).',
+    },
+    {
+      name: 'lpunpack & lpmake (Dynamic Partition Tooling)',
+      desc: 'Extract raw ext4/erofs image files from a monolithic super.img container.',
+      command: '# Unpack super.img into individual partition images:\n$ANDROID_HOST_OUT/bin/lpunpack super.img unpacked/\nls -lh unpacked/',
+      output: `-rw-r--r-- 1 dev dev 2.1G Jan 15 10:30 system_a.img
+-rw-r--r-- 1 dev dev 480M Jan 15 10:30 vendor_a.img
+-rw-r--r-- 1 dev dev 820M Jan 15 10:30 product_a.img
+-rw-r--r-- 1 dev dev 340M Jan 15 10:30 system_ext_a.img`,
+      tip: 'You can mount the extracted system_a.img locally on Linux using "sudo mount -o loop,ro unpacked/system_a.img /mnt" to inspect files without flashing!',
+    },
+  ]}
+/>
+
+---
+
+<DevGotcha
+  title="Phase 11 Real Device Flashing Traps & Gotchas"
+  traps={[
+    {
+      name: 'The Bootloader vs. fastbootd "Partition not found" Trap',
+      symptom: 'Running "fastboot flash system system.img" fails with: "fastboot: error: cannot find partition: system".',
+      cause: 'The device is in the firmware bootloader. Modern Android devices do NOT have a physical partition named "system"; system lives as a logical partition inside the "super" container.',
+      fix: 'Run "fastboot reboot fastboot" to switch into fastbootd, which loads device-mapper dynamic partition tables, then re-run the flash command.',
+    },
+    {
+      name: 'The Missing --disable-verity vbmeta Bootloop',
+      symptom: 'Device loops into bootloader with "Verity mode is enforcing... image signature mismatch" after flashing a custom kernel.',
+      cause: 'Android Verified Boot (AVB) validates cryptographic sha256 hashes of boot.img against vbmeta.img. Modifying the kernel without disabling verification triggers an immediate boot abort.',
+      fix: 'Flash vbmeta with verification disabled: "fastboot flash --disable-verity --disable-verification vbmeta vbmeta.img".',
+    },
+    {
+      name: 'The Locked Bootloader Flash Rejection',
+      symptom: 'Flashing fails with: "fastboot: error: Device is not unlocked for flashing".',
+      cause: 'OEM Unlocking was not enabled in Settings > System > Developer options, or "fastboot flashing unlock" was never executed.',
+      fix: 'Boot stock Android, enable Developer Options, toggle "OEM Unlocking", reboot to bootloader with "adb reboot bootloader", and execute "fastboot flashing unlock". (WARNING: this will wipe userdata).',
+    },
+  ]}
+/>
+
+---
+
 ## Checkpoint
 
 <Checkpoint
@@ -330,6 +412,32 @@ fastboot -w update image-shiba-*.zip`}
     'Symptom: Device loops into bootloader with "Verity mode is enforcing... image signature mismatch". Cause: You flashed a modified boot.img or system.img without flashing with --disable-verity --disable-verification vbmeta.img. Fix: Flash vbmeta with verification disabled or restore stock factory images.',
     'Symptom: fastboot flash system system.img fails with "Partition not found". Cause: Attempting to flash a logical partition from bootloader fastboot rather than fastbootd. Fix: Execute fastboot reboot fastboot first to enter userspace fastboot.',
   ]}
+/>
+
+<TrialErrorLab
+  title="Hands-on Lab: Dissect a Factory super.img with lpunpack"
+  goal="Extract dynamic sub-partitions from an Android super container image and inspect the device-mapper partition layout on your host."
+  experiment={`Download a factory image archive or extract super.img from your local build output:
+export SUPER_PATH=$ANDROID_PRODUCT_OUT/super.img
+
+Verify the file type:
+file $SUPER_PATH
+
+Unpack all logical images:
+mkdir -p /tmp/super_extracted
+$ANDROID_HOST_OUT/bin/lpunpack $SUPER_PATH /tmp/super_extracted
+ls -la /tmp/super_extracted/`}
+  expectedError={`super.img: Android sparse image, version: 1.0, Total of ... blocks
+Unpacking system_a.img (2248102912 bytes)...
+Unpacking vendor_a.img (491204812 bytes)...
+Unpacking product_a.img (829104810 bytes)...`}
+  diagnosis="Android's super.img contains a proprietary LP (Logical Partition) header describing dynamic block group limits and metadata tables. lpunpack reads this metadata, simulates the device-mapper (dm-linear) kernel table, and extracts each contiguous logical partition back into an unsparse ext4 or erofs image file."
+  fix={`To inspect files inside the extracted partition without flashing a phone:
+mkdir -p /tmp/sys_mount
+sudo mount -o loop,ro /tmp/super_extracted/system_a.img /tmp/sys_mount
+ls /tmp/sys_mount/system/bin/
+# Clean up:
+sudo umount /tmp/sys_mount`}
 />
 
 ---

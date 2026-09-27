@@ -441,3 +441,180 @@ export function ConceptComparison({
   );
 }
 
+/**
+ * DidYouKnow component: Industry trivia, Android architecture origins, and fascinating facts.
+ */
+export function DidYouKnow({title = 'Did You Know?', children}) {
+  return (
+    <div className={styles.didYouKnow}>
+      <div className={styles.didYouKnowHeader}>
+        <span className={styles.didYouKnowIcon}>💡</span>
+        <strong className={styles.didYouKnowTitle}>{title}</strong>
+      </div>
+      <div className={styles.didYouKnowBody}>{children}</div>
+    </div>
+  );
+}
+
+/**
+ * DevGotcha component: Real-world struggle zones, developer traps, and QA pitfalls.
+ */
+export function DevGotcha({title = 'Developer & Tester Struggle Zone', traps = []}) {
+  if (!traps || traps.length === 0) return null;
+  return (
+    <div className={styles.devGotcha}>
+      <div className={styles.devGotchaHeader}>
+        <span className={styles.devGotchaIcon}>⚠️</span>
+        <strong className={styles.devGotchaTitle}>{title}</strong>
+      </div>
+      <div className={styles.devGotchaList}>
+        {traps.map((t, i) => (
+          <div key={i} className={styles.devGotchaItem}>
+            <div className={styles.devGotchaTrap}>
+              <span className={styles.gotchaNum}>#{i + 1}</span> {t.trap}
+            </div>
+            {t.symptom && (
+              <p className={styles.gotchaRow}>
+                <strong className={styles.gotchaLabelRed}>Symptom:</strong> {t.symptom}
+              </p>
+            )}
+            {t.why && (
+              <p className={styles.gotchaRow}>
+                <strong className={styles.gotchaLabelOrange}>Why it happens:</strong> {t.why}
+              </p>
+            )}
+            {t.fix && (
+              <p className={styles.gotchaRow}>
+                <strong className={styles.gotchaLabelGreen}>The Fix:</strong> {t.fix}
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * TrialErrorLab component: Guided failure drills where learners intentionally break things
+ * to understand the exact crash symptom and how to diagnose it.
+ */
+export function TrialErrorLab({title, goal, experiment, expectedError, diagnosis, fix}) {
+  return (
+    <div className={styles.trialLab}>
+      <div className={styles.trialLabHeader}>
+        <span className={styles.trialLabIcon}>🔬</span>
+        <strong>Trial &amp; Error Lab: {title}</strong>
+      </div>
+      <div className={styles.trialLabBody}>
+        {goal && <p className={styles.trialGoal}><strong>🎯 Goal:</strong> {goal}</p>}
+        {experiment && (
+          <div className={styles.trialSection}>
+            <strong className={styles.trialStepTitle}>1. The Broken Experiment (Do this on purpose):</strong>
+            <div className={styles.trialCode}>{experiment}</div>
+          </div>
+        )}
+        {expectedError && (
+          <div className={styles.trialSection}>
+            <strong className={styles.trialStepTitle}>2. What will happen (Expected Failure Output):</strong>
+            <div className={styles.trialErrorBox}>{expectedError}</div>
+          </div>
+        )}
+        {diagnosis && (
+          <div className={styles.trialSection}>
+            <strong className={styles.trialStepTitle}>3. How to Diagnose It:</strong>
+            <div className={styles.trialDiagnosis}>{diagnosis}</div>
+          </div>
+        )}
+        {fix && (
+          <div className={styles.trialSection}>
+            <strong className={styles.trialStepTitle}>4. The Fix:</strong>
+            <div className={styles.trialFix}>{fix}</div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * DebugToolkit component: Tabbed interactive debugging cheat-sheet.
+ */
+export function DebugToolkit({title = 'Debugging Arsenal & How-Tos', tools = []}) {
+  const [activeTab, setActiveTab] = useState(0);
+  if (!tools || tools.length === 0) return null;
+
+  return (
+    <div className={styles.debugToolkit}>
+      <div className={styles.debugHeader}>
+        <span className={styles.debugIcon}>🛠️</span>
+        <strong className={styles.debugTitle}>{title}</strong>
+      </div>
+      <div className={styles.debugTabs}>
+        {tools.map((tool, idx) => (
+          <button
+            key={idx}
+            type="button"
+            className={clsx(styles.debugTab, activeTab === idx && styles.debugTabActive)}
+            onClick={() => setActiveTab(idx)}>
+            {tool.name}
+          </button>
+        ))}
+      </div>
+      <div className={styles.debugContent}>
+        {tools[activeTab] && (
+          <div>
+            <div className={styles.debugDesc}>
+              <strong>Purpose:</strong> {tools[activeTab].purpose}
+            </div>
+            {tools[activeTab].command && (
+              <div className={styles.debugCmdBox}>
+                <span className={styles.debugCmdLabel}>Command:</span>
+                <code>{tools[activeTab].command}</code>
+              </div>
+            )}
+            {tools[activeTab].tip && (
+              <div className={styles.debugTip}>
+                <strong>💡 Pro-Tip:</strong> {tools[activeTab].tip}
+              </div>
+            )}
+            {tools[activeTab].sampleOutput && (
+              <details className={styles.debugOutputDetails}>
+                <summary>View Sample Diagnostic Output</summary>
+                <pre className={styles.debugPre}>{tools[activeTab].sampleOutput}</pre>
+              </details>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * VocabularyHelper component: Inline tooltip component demystifying difficult words for non-native speakers.
+ */
+export function VocabularyHelper({word, simple, analogy}) {
+  const [showTooltip, setShowTooltip] = useState(false);
+
+  return (
+    <span
+      className={styles.vocabWrapper}
+      onMouseEnter={() => setShowTooltip(true)}
+      onMouseLeave={() => setShowTooltip(false)}
+      onClick={() => setShowTooltip((s) => !s)}>
+      <span className={styles.vocabWord}>{word}</span>
+      <span className={styles.vocabBadge}>?</span>
+      {showTooltip && (
+        <span className={styles.vocabTooltip}>
+          <span className={styles.vocabSimple}><strong>Simple Meaning:</strong> {simple}</span>
+          {analogy && (
+            <span className={styles.vocabAnalogy}><strong>Real-World Analogy:</strong> {analogy}</span>
+          )}
+        </span>
+      )}
+    </span>
+  );
+}
+
+

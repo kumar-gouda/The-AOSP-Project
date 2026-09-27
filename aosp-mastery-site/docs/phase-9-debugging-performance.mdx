@@ -20,6 +20,11 @@ import {
   DeepDive,
   CodeAnnotator,
   ConceptComparison,
+  DidYouKnow,
+  DevGotcha,
+  TrialErrorLab,
+  DebugToolkit,
+  VocabularyHelper,
 } from '@site/src/components/Unit';
 import {PhaseHeader} from '@site/src/components/PhaseHeader';
 import {CompleteButton} from '@site/src/components/Progress';
@@ -98,6 +103,18 @@ When debugging on-device, you cannot simply attach a GUI debugger. You must read
     },
   ]}
 />
+
+<DidYouKnow title="Why Google Built Perfetto (And Why Systrace Was Retired)">
+  For nearly a decade, Android engineers relied on <code>systrace</code>, a Python 2 script that parsed text lines streamed from the kernel's <code>trace_pipe</code> over ADB.
+  <br /><br />
+  <strong>Why Systrace Broke Down:</strong>
+  <ol>
+    <li><strong>The Heisenbug Problem:</strong> Systrace streamed raw ASCII text over USB. On high-frequency CPU events (like scheduler context switches), the logging itself consumed 15% to 20% of CPU and USB bus bandwidth. Often, measuring the lag made the lag worse, or measuring the race condition made the bug disappear!</li>
+    <li><strong>Short Buffer Limits:</strong> Ring buffers would overflow in less than 5 to 10 seconds. You could never catch a bug that occurred intermittently over a 10-minute session.</li>
+    <li><strong>No Query Engine:</strong> Analyzing a trace meant visually scrolling through miles of multicolored horizontal bars in a browser canvas.</li>
+  </ol>
+  <strong>The Perfetto Architecture:</strong> Written in high-performance C++, Perfetto streams compressed binary Protocol Buffers into shared memory ring buffers with less than <strong>1% CPU overhead</strong>. Traces can record continuously in the background for hours. Even better: Perfetto ingests traces into an in-memory <strong>SQLite database</strong>, allowing you to find the longest Binder calls or scheduler delays with a simple SQL <code>SELECT</code> query!
+</DidYouKnow>
 
 ---
 
@@ -314,6 +331,89 @@ To achieve mastery, you must diagnose **three distinct bugs** introduced into yo
 
 ---
 
+---
+
+<DebugToolkit
+  title="Phase 9 Senior AOSP On-Device Debugging Toolkit"
+  tools={[
+    {
+      name: 'gdbclient.py / lldbclient.py (Remote Device Debugger)',
+      desc: 'Seamlessly attach an interactive host debugger to any native process or crash dump on the device across ADB.',
+      command: '# Attach to a running native service by PID or name:\ngdbclient.py -p $(pidof surfaceflinger)\n\n# Or debug from device boot/startup:\ngdbclient.py --attach-name my_daemon\n\n# Debug a saved core dump or tombstone:\ngdbclient.py --tombstone /data/tombstones/tombstone_00',
+      output: `Attached to process 1420 on target device.
+[Switching to Thread 1420.1425]
+0x00007fa21402 in SurfaceFlinger::composite() at SurfaceFlinger.cpp:1840
+(gdb) bt
+#0  0x00007fa21402 in SurfaceFlinger::composite() at SurfaceFlinger.cpp:1840
+#1  0x00007fa21890 in SurfaceFlinger::onMessageReceived() at SurfaceFlinger.cpp:1204
+(gdb) print mDrawingState.layers.size()
+$1 = 4`,
+      tip: 'Senior Pro-Tip: When attaching GDB/LLDB to system_server or SurfaceFlinger, ALWAYS disable the system watchdog first ("adb shell setprop test.disable_watchdog 1"). Otherwise, freezing execution on a breakpoint will trigger a hardware watchdog panic after 60 seconds!',
+    },
+    {
+      name: 'Perfetto SQL (Command-Line Trace Queries)',
+      desc: 'Query system traces like a relational database using trace_processor and SQL queries.',
+      command: '# Download standalone trace processor:\ncurl -LO https://get.perfetto.dev/trace_processor\nchmod +x ./trace_processor\n\n# Query the 5 slowest Binder calls in the trace:\n./trace_processor --query "SELECT ts, dur/1e6 as dur_ms, name FROM slice WHERE name LIKE \'%binder transaction%\' ORDER BY dur DESC LIMIT 5;" trace.perfetto-trace',
+      output: `ts                    dur_ms     name
+1420918204910         42.81      binder transaction: ActivityManager::broadcastIntent
+1420919401204         28.12      binder transaction: WindowManager::relayoutWindow
+1420921049102         18.40      binder transaction: SurfaceFlinger::queueBuffer`,
+      tip: 'Do not waste hours squinting at timeline tracks. Run SQL queries with trace_processor to instantly identify thread preemption, lock contention, and runaway transaction latency.',
+    },
+    {
+      name: 'ftrace function_graph (Kernel Execution Call Graphs)',
+      desc: 'Trace the exact nested C call graph of any Linux kernel function with microsecond timestamps.',
+      command: 'adb shell "echo 0 > /sys/kernel/tracing/tracing_on\necho function_graph > /sys/kernel/tracing/current_tracer\necho binder_transaction > /sys/kernel/tracing/set_ftrace_filter\necho 1 > /sys/kernel/tracing/tracing_on\nsleep 1\necho 0 > /sys/kernel/tracing/tracing_on\ncat /sys/kernel/tracing/trace | head -n 30"',
+      output: ` 0)               |  binder_transaction() {
+ 0)   0.410 us    |    binder_get_node();
+ 0)               |    binder_alloc_new_buf() {
+ 0)   0.210 us    |      kzalloc();
+ 0)   1.820 us    |    }
+ 0)   0.501 us    |    binder_proc_transaction();
+ 0)   4.810 us    |  }`,
+      tip: 'ftrace is built directly into the Linux kernel and has zero userspace overhead. It is the fastest way to confirm whether a device driver is taking locks or sleeping inside an interrupt handler.',
+    },
+    {
+      name: 'simpleperf (Hardware CPU Performance Profiler)',
+      desc: 'Profile CPU cache misses, branch mispredictions, and CPU cycles down to the assembly instruction.',
+      command: '# Record CPU cycles for 5 seconds across the whole system:\nadb shell simpleperf record -a --duration 5 -o /data/local/tmp/perf.data\n\n# Generate report sorted by symbol:\nadb shell simpleperf report -i /data/local/tmp/perf.data --sort comm,symbol | head -n 25',
+      output: `Overhead  Command          Symbol
+14.2%     surfaceflinger   android::RenderEngine::drawLayers()
+8.1%      system_server    com.android.server.am.ActivityManagerService.updateOomAdj()
+5.4%      composer@2.1     hwc_sync_fence_wait()`,
+      tip: 'simpleperf runs directly on the device using ARM Hardware Performance Monitor Units (PMUs). It can pinpoint exactly which loop in your C++ code is causing CPU throttling.',
+    },
+  ]}
+/>
+
+---
+
+<DevGotcha
+  title="Phase 9 Debugging & Performance Traps & Gotchas"
+  traps={[
+    {
+      name: 'The Stripped Symbol Mirage ([vdso] 0x...)',
+      symptom: 'Running "ndk-stack -sym <dir>" prints raw hexadecimal addresses like "[vdso] 0x00042a10" without any source files or line numbers.',
+      cause: 'You pointed -sym to the device partition folder ($ANDROID_PRODUCT_OUT/system), which contains stripped production binaries stripped of .debug_* sections.',
+      fix: 'Always point -sym to the unstripped host debug symbols directory: "$ANDROID_PRODUCT_OUT/symbols".',
+    },
+    {
+      name: 'The 60-Second Watchdog Kill on Breakpoints',
+      symptom: 'You attach GDB or LLDB to system_server or SurfaceFlinger; 60 seconds into stepping through code, the phone suddenly reboots.',
+      cause: 'The hardware and software Watchdogs expect periodic ping heartbeats on the main looper. When you pause the process on a breakpoint, the watchdog thread starves and triggers a kernel panic or system restart.',
+      fix: 'Disable the watchdog before breakpoint debugging: "adb shell setprop test.disable_watchdog 1" and kill the hardware watchdog daemon if present.',
+    },
+    {
+      name: 'The Perfetto Ring Buffer Data Loss Trap',
+      symptom: 'Opening a recorded Perfetto trace shows missing time segments and "Data loss detected: ftrace ring buffer overrun".',
+      cause: 'High-frequency tracepoints (like sched_switch and raw syscalls) produce hundreds of megabytes per second. A small 4 MB buffer overflows in less than a second.',
+      fix: 'Increase buffer_size_kb in your trace config to at least 65536 (64 MB), or filter out high-volume categories like raw syscalls and workqueue events.',
+    },
+  ]}
+/>
+
+---
+
 ## Checkpoint
 
 <Checkpoint
@@ -341,6 +441,46 @@ To achieve mastery, you must diagnose **three distinct bugs** introduced into yo
     'Symptom: Perfetto trace contains missing event chunks: "Data loss detected". Cause: Too many ftrace events enabled for the allocated buffer size. Fix: Increase buffer_size_kb or filter events to only the specific subsystem under investigation.',
     'Symptom: Tombstone file is not generated in /data/tombstones/. Cause: crash_dump process lacked ptrace permissions or /data partition is 100% full. Fix: Check logcat -b crash and verify df -h /data.',
   ]}
+/>
+
+<TrialErrorLab
+  title="Hands-on Lab: Seed a SIGSEGV and Symbolicate the Tombstone with ndk-stack"
+  goal="Intentionally cause a native crash, locate the resulting tombstone in /data/tombstones, and recover the exact C++ file and line number using ndk-stack."
+  experiment={`Add a deliberate null pointer dereference into your native daemon:
+
+// In crash_test.cpp:
+void dangerousCalculation(int *value) {
+    // Deliberate null dereference:
+    *value = 42; 
+}
+
+int main() {
+    int *null_ptr = nullptr;
+    dangerousCalculation(null_ptr);
+    return 0;
+}
+
+Build, push to Cuttlefish, and execute:
+adb push crash_test /system/bin/
+adb shell /system/bin/crash_test`}
+  expectedError={`Segmentation fault
+// In logcat -b crash:
+pid: 19402, tid: 19402, name: crash_test  >>> /system/bin/crash_test <<<
+signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x0
+    #00 pc 0000000000001420  /system/bin/crash_test`}
+  diagnosis="The CPU attempted to execute a store instruction (str / mov) to memory address 0x0. Because address 0x0 is in an unmapped page protected by the kernel MMU, the hardware raised a Page Fault Exception. The kernel sent SIGSEGV to the process, which triggered Bionic's crash handler to fork debuggerd64, halt the process, collect register dumps, and generate /data/tombstones/tombstone_00."
+  fix={`Run ndk-stack against the unstripped debug symbols to translate the hex pc into source code:
+
+adb logcat -b crash -d | ndk-stack -sym $ANDROID_PRODUCT_OUT/symbols
+
+Output immediately pinpoints the exact line:
+#00 0x00001420 in dangerousCalculation(int*) at crash_test.cpp:4
+    *value = 42;
+
+Fix by verifying the pointer before dereference:
+if (value != nullptr) {
+    *value = 42;
+}`}
 />
 
 ---

@@ -20,6 +20,11 @@ import {
   DeepDive,
   CodeAnnotator,
   ConceptComparison,
+  DidYouKnow,
+  DevGotcha,
+  TrialErrorLab,
+  DebugToolkit,
+  VocabularyHelper,
 } from '@site/src/components/Unit';
 import {PhaseHeader} from '@site/src/components/PhaseHeader';
 import {CompleteButton} from '@site/src/components/Progress';
@@ -102,6 +107,17 @@ Transitioning to physical silicon requires familiarity with board support packag
     },
   ]}
 />
+
+<DidYouKnow title="Why Pure AOSP Cannot Boot on Physical Hardware Without Vendor Blobs">
+  If Android is open-source (AOSP), why can't you just compile the source tree and flash it directly to a Google Pixel phone?
+  <br /><br />
+  <strong>The Proprietary Hardware Silicon Reality:</strong>
+  While Google open-sources the entire operating system, underlying hardware silicon—such as the GPU (Arm Mali / Qualcomm Adreno), cellular baseband modem, Wi-Fi/Bluetooth chipsets (Broadcom), and camera Image Signal Processor (ISP)—contain proprietary firmware, closed-source drivers, and algorithms protected by non-disclosure agreements (NDAs).
+  <br /><br />
+  Google distributes these closed-source libraries as pre-compiled <strong>vendor binaries</strong> (blobs) at <code>developers.google.com/android/drivers</code>.
+  <br /><br />
+  If you compile an AOSP Pixel target without extracting these blobs, Soong will build system images that lack GPU acceleration, cellular baseband communication, and touchscreen drivers. The phone will boot into a black screen with no radio!
+</DidYouKnow>
 
 ---
 
@@ -258,6 +274,76 @@ To prove that you have full mastery over physical hardware bring-up, modify a pl
 
 ---
 
+<DebugToolkit
+  title="Phase 12 Pixel Hardware Bring-Up Diagnostic Toolkit"
+  tools={[
+    {
+      name: 'fastboot flashall Verification',
+      desc: 'Verify device build outputs, android-info.txt partition requirements, and perform full platform flashing.',
+      command: '# Verify target output folder contains required images:\nls -lh $ANDROID_PRODUCT_OUT/*.img\n\n# Flash all built images with userdata wipe:\nfastboot flashall -w',
+      output: `target reported max-download-size of 268435456 bytes
+Sending 'boot_a' (65536 KB)                        OKAY [  1.420s]
+Writing 'boot_a'                                   OKAY [  0.312s]
+Sending 'init_boot_a' (8192 KB)                    OKAY [  0.180s]
+Writing 'init_boot_a'                              OKAY [  0.082s]
+Sending 'super' (4209124 KB)                       OKAY [ 42.102s]
+Writing 'super'                                    OKAY [ 38.410s]
+Erasing 'userdata'                                 OKAY [  0.890s]
+Rebooting                                          OKAY [  0.002s]`,
+      tip: 'fastboot flashall automatically reads android-info.txt in $ANDROID_PRODUCT_OUT to confirm that the connected physical device matches the target board name (require board=husky).',
+    },
+    {
+      name: 'ADB Root & Remount on Physical Hardware',
+      desc: 'Unlock live read-write access to system partitions for rapid prototyping on physical devices.',
+      command: '# Restart ADB as root:\nadb root\n\n# Disable verity and remount partitions as read-write:\nadb remount\nadb reboot\nadb remount',
+      output: `Remount succeeded
+/system: now writable
+/vendor: now writable
+/product: now writable`,
+      tip: 'On userdebug builds, "adb remount" uses overlayfs to create a writable layer on top of read-only partitions. You can push modified APKs or shared libraries directly to the phone without flashing!',
+    },
+    {
+      name: 'Google Android Flash Tool (WebUSB Emergency Recovery)',
+      desc: 'The official browser-based recovery tool for restoring stock Google firmware via WebUSB.',
+      command: '# Put phone into bootloader mode and connect via USB:\nadb reboot bootloader\n# Navigate in Google Chrome to: https://flash.android.com',
+      output: `[Device Detected: Pixel 8 (husky)]
+[Selected Build: Android 14.0.0 (Latest Public Release)]
+[Wiping Userdata: YES]
+[Flashing All Partitions...]
+[Device Restored Successfully]`,
+      tip: 'If your device gets stuck in a bootloop and refuses to boot, open https://flash.android.com in Chrome. It requires zero command-line tools and flashes factory firmware directly across WebUSB.',
+    },
+  ]}
+/>
+
+---
+
+<DevGotcha
+  title="Phase 12 Pixel Hardware Bring-Up Traps & Gotchas"
+  traps={[
+    {
+      name: 'The Custom ROM "fastboot flashing lock" Hard Brick',
+      symptom: 'The phone powers on, immediately shows a black screen with "Your device is corrupt. It can\'t be trusted and will not boot", and completely shuts down. USB fastboot no longer responds.',
+      cause: 'You ran "fastboot flashing lock" on an image signed with AOSP development test keys. Because test keys do not match Google\'s hardware-fused production keys, AVB rejects the image and refuses to boot. Because the bootloader is now locked, it also refuses to flash anything over USB!',
+      fix: 'CRITICAL RULE: NEVER lock the bootloader on self-compiled AOSP builds! Keep the bootloader unlocked for the lifetime of your development device.',
+    },
+    {
+      name: 'Missing -w (Userdata Wipe) Encryption Loop',
+      symptom: 'Device flashes successfully, shows Google logo, and then bootloops or prompts: "Cannot load Android system. Your data may be corrupt".',
+      cause: 'Flashing a newly compiled AOSP build over a stock Google ROM without "-w" leaves existing userdata encrypted with cryptographic keys the new build\'s KeyMint/vold cannot decode.',
+      fix: 'Always pass the -w flag when transitioning between different OS builds: "fastboot flashall -w".',
+    },
+    {
+      name: 'Vendor Binary / Build ID Tag Mismatch',
+      symptom: 'Build fails during Soong packaging or device boots with broken touchscreen and no Wi-Fi.',
+      cause: 'The vendor blobs downloaded from developers.google.com did not match the exact build ID or Git revision checked out in your AOSP repo.',
+      fix: 'Check build/make/core/build_id.mk to read your current BUILD_ID, and download only the matching driver archive.',
+    },
+  ]}
+/>
+
+---
+
 ## Checkpoint
 
 <Checkpoint
@@ -285,6 +371,34 @@ To prove that you have full mastery over physical hardware bring-up, modify a pl
     'Symptom: Device boots into Qualcomm / EDL emergency download mode or Tensor Crashdump. Cause: Flashed mismatched radio or bootloader firmware. Fix: Flash the official Google factory image bundle using flash-all.sh to restore baseline firmware before trying custom images again.',
     'Symptom: fastboot flashall fails with "fastboot: error: could not load android-info.txt". Cause: Running fastboot outside of the Android build environment. Fix: Ensure ANDROID_PRODUCT_OUT environment variable is set or run from out/target/product/<codename>/.',
   ]}
+/>
+
+<TrialErrorLab
+  title="Hands-on Lab: Safely Recover a Soft-Bricked Pixel via flash-all.sh"
+  goal="Simulate a recovery scenario and practice restoring factory firmware from Google without bricking hardware."
+  experiment={`Put device into fastboot bootloader mode:
+adb reboot bootloader
+# Or hold Volume Down + Power button on physical phone
+
+Download official factory image package from developers.google.com/android/images:
+unzip <device>-<build_id>-factory-*.zip
+cd <device>-<build_id>/
+
+Run the official flash script:
+./flash-all.sh`}
+  expectedError={`Sending 'bootloader_a' ... OKAY
+Writing 'bootloader_a' ... OKAY
+Rebooting into bootloader ... OKAY
+Sending 'radio_a' ... OKAY
+Writing 'radio_a' ... OKAY
+Rebooting into fastbootd ...
+Flashing super partition ... OKAY
+Erasing userdata ... OKAY
+Rebooting into Android ...`}
+  diagnosis="flash-all.sh is Google's canonical recovery script. It flashes the primary bootloader (xbl/abl), baseband radio modem, updates the active slot, enters fastbootd to write dynamic partitions, and formats userdata with clean cryptographic headers."
+  fix={`If flash-all.sh halts with 'command not found':
+1. Ensure fastboot is in your PATH: export PATH=$PATH:~/platform-tools
+2. Ensure fastboot version is >= 34.0.4: fastboot --version`}
 />
 
 ---
