@@ -52,16 +52,19 @@
 }
 
 .quizOption {
-  display: block;
+  display: flex;
+  align-items: center;
   width: 100%;
   text-align: left;
-  padding: 0.5rem 0.75rem;
+  padding: 0.6rem 0.85rem;
+  min-height: 44px;
   border: 1px solid var(--ifm-color-emphasis-300);
   border-radius: 6px;
   background: var(--ifm-background-color);
   color: var(--ifm-font-color-base);
   cursor: pointer;
   font-size: 0.95rem;
+  touch-action: manipulation;
 }
 
 .quizOption:hover {
@@ -245,6 +248,8 @@
 
 .troubleshooting {
   border-left-color: #f59e0b;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .troubleshootingSummary {
@@ -323,7 +328,7 @@
 
 .spotlightGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
   gap: 1rem;
 }
 

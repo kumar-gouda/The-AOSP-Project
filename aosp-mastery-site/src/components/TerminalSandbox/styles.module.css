@@ -17,6 +17,8 @@
   background: #161b22;
   border-bottom: 1px solid #30363d;
   user-select: none;
+  flex-wrap: wrap;
+  gap: 0.5rem;
 }
 
 .windowControls {
@@ -52,6 +54,7 @@
 .headerBadges {
   display: flex;
   gap: 0.4rem;
+  flex-wrap: wrap;
 }
 
 .statusBadge {
@@ -60,6 +63,7 @@
   padding: 0.15rem 0.5rem;
   border-radius: 4px;
   letter-spacing: 0.04em;
+  white-space: nowrap;
 }
 
 .badgeRoot {
@@ -90,9 +94,11 @@
   padding: 1.25rem;
   height: 380px;
   overflow-y: auto;
+  overflow-x: auto;
   font-size: 0.92rem;
   line-height: 1.5;
   cursor: text;
+  -webkit-overflow-scrolling: touch;
 }
 
 .bannerBlock {
@@ -102,17 +108,20 @@
 
 .bannerLine {
   white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .cmdLine {
   margin-top: 0.5rem;
   margin-bottom: 0.25rem;
+  word-break: break-word;
 }
 
 .prompt {
   color: #3fb950;
   font-weight: 700;
   margin-right: 0.5rem;
+  white-space: nowrap;
 }
 
 .cmdEntered {
@@ -127,6 +136,7 @@
 
 .outputLine {
   white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .inputForm {
@@ -143,9 +153,10 @@
   border: none;
   color: #f0f6fc;
   font-family: inherit;
-  font-size: 0.95rem;
+  font-size: 1rem; /* 16px minimum prevents iOS Safari auto-zoom */
   outline: none;
   padding: 0.2rem 0;
+  min-width: 120px;
 }
 
 .terminalInput::placeholder {
@@ -167,6 +178,7 @@
   font-weight: 600;
   color: #8b949e;
   margin-right: 0.2rem;
+  white-space: nowrap;
 }
 
 .pillsList {
@@ -181,10 +193,12 @@
   color: #c9d1d9;
   font-size: 0.75rem;
   font-family: inherit;
-  padding: 0.2rem 0.55rem;
+  padding: 0.3rem 0.6rem;
   border-radius: 4px;
   cursor: pointer;
   transition: all 0.15s ease;
+  white-space: nowrap;
+  touch-action: manipulation;
 }
 
 .pill:hover {
@@ -202,4 +216,45 @@
 .pillClear:hover {
   background: rgba(248, 81, 73, 0.25);
   color: #ffa198;
+}
+
+/* ========================================================================= */
+/* Mobile and Tablet Media Queries (< 768px)                                */
+/* ========================================================================= */
+@media screen and (max-width: 768px) {
+  .terminalWrapper {
+    margin: 1rem 0;
+    border-radius: 8px;
+  }
+
+  .terminalHeader {
+    padding: 0.5rem 0.75rem;
+  }
+
+  .terminalTitle {
+    font-size: 0.78rem;
+  }
+
+  .terminalBody {
+    padding: 0.85rem;
+    height: 320px;
+    font-size: 0.85rem;
+  }
+
+  .prompt {
+    font-size: 0.82rem;
+  }
+
+  .inputForm {
+    padding: 0.5rem 0.75rem;
+  }
+
+  .quickCommands {
+    padding: 0.5rem 0.75rem;
+  }
+
+  .pill {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.72rem;
+  }
 }

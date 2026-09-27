@@ -21,8 +21,7 @@ function HomepageHeader() {
         <div className={styles.buttons}>
           <Link
             className="button button--secondary button--lg"
-            to="/docs/intro"
-            style={{marginRight: '0.75rem'}}>
+            to="/docs/intro">
             Start the Course
           </Link>
           <Link
