@@ -158,10 +158,14 @@ STRICT_LINKS=1 npm run build
 
 ## 🧩 Interactive Platform Features
 
-- **⚡ Flashcards & Active Recall Mode:** In the [Glossary](https://kumar-gouda.github.io/The-AOSP-Project/docs/glossary), toggle between the traditional dictionary list and interactive 3D flipping flashcards with self-assessment tracking and keyboard shortcuts (`Space` to flip, `Arrow` keys to navigate).
+- **💡 Dual-Mode Glossary (Technical vs. Plain English):** In the [Glossary](https://kumar-gouda.github.io/The-AOSP-Project/docs/glossary), toggle between `[📖 Technical View]` and `[💡 Plain English & Analogies]` across 60+ core terms, or switch into **3D flipping flashcard mode** with active recall self-assessment and keyboard shortcuts (`Space` to flip, `Arrow` keys to navigate).
 - **🖥️ In-Browser ADB Terminal Sandbox:** Visit the [Terminal Sandbox](https://kumar-gouda.github.io/The-AOSP-Project/terminal) to practice running real `adb` and `fastboot` commands against a simulated Android 15 / Linux 6.1 GKI device (querying `getprop`, testing `service list`, inspecting `lshal`, toggling SELinux modes, and reading kernel module nodes).
+- **⚠️ Developer & Tester Struggle Zones (`<DevGotcha>`):** Every phase documents the exact traps, silent failures, build errors, and gotchas where developers and testers lose days—complete with symptoms, root causes, and verbatim fixes.
+- **🔬 Trial & Error Failure Labs (`<TrialErrorLab>`):** Guided hands-on failure drills where learners intentionally break code, observe verbatim system crashes (ASan aborts, SIGBUS, SELinux AVC denials, Binder buffer overflows, kernel panics), diagnose root causes, and apply verified fixes.
+- **🧰 AOSP & Kernel Debugging Toolkits (`<DebugToolkit>`):** Interactive CLI diagnostic cheat sheets embedded in every phase covering `strace`, `readelf`, `gdbclient.py`, `Perfetto` SQL, `ndk-stack`, `pstore`, `dynamic_debug`, `lshal`, `dumpsys`, and `atest`.
+- **📖 Plain English Vocabulary Helpers (`<VocabularyHelper>`):** Relatable real-world analogies explaining dense system concepts for non-native English speakers.
 - **📊 Real-Time Competency Map & Local Storage:** Track completed phases, earned XP, and milestone deliverables across Recruit, Builder, Engineer, Architect, and Master tiers. Back up your progress anytime with one-click JSON export/import.
-- **🛠️ Pedagogical Learning Units:** Every phase contains structured pedagogical sections: `<KeywordSpotlight>`, `<DeepDive>`, `<ConceptComparison>`, `<CodeAnnotator>`, `<BreakIt>`, `<Checkpoint>`, and `<Troubleshooting>`.
+- **🛠️ Comprehensive Pedagogical Units:** Every phase follows a battle-tested structure: `<Hook>`, `<Outcome>`, `<Prereqs>`, `<KeywordSpotlight>`, `<DidYouKnow>`, `<DeepDive>`, `<ConceptComparison>`, `<CodeAnnotator>`, `<DebugToolkit>`, `<DevGotcha>`, `<BreakIt>`, `<TrialErrorLab>`, `<Checkpoint>`, `<Troubleshooting>`, and `<NextMission>`.
 
 ---
 
