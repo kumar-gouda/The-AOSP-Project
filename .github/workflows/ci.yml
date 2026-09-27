@@ -1,0 +1,51 @@
+# Continuous integration for the AOSP Mastery site.
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - 'aosp-mastery-site/**'
+      - '.github/workflows/ci.yml'
+  pull_request:
+    branches: [master, main]
+    paths:
+      - 'aosp-mastery-site/**'
+      - '.github/workflows/ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build (strict links)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: aosp-mastery-site
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: aosp-mastery-site/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate competency map
+        run: node -e "import('./data/load-competency-map.mjs').then(m => { const r = m.loadCompetencyMap(); console.log('competency map OK:', JSON.stringify(r.stats)); }).catch(e => { console.error(e.message); process.exit(1); })"
+
+      - name: Build site (broken links are errors)
+        env:
+          STRICT_LINKS: '1'
+        run: npm run build

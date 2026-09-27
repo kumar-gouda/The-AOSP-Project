@@ -1,0 +1,18 @@
+# SELinux Policy definition for my_daemon
+
+type my_daemon, domain, coredomain;
+type my_daemon_exec, exec_type, file_type, system_file_type;
+
+# Allow init to execute the binary and transition into my_daemon domain
+init_daemon_domain(my_daemon)
+
+# Binder communication permissions
+binder_use(my_daemon)
+binder_call(my_daemon, system_server)
+
+# Logging and properties
+allow my_daemon logd:unix_dgram_socket sendto;
+set_prop(my_daemon, system_prop)
+
+# Neverallow compliance check: ensure vendor or untrusted apps cannot write directly to daemon bin
+# neverallow untrusted_app my_daemon_exec:file { write };

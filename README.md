@@ -1,12 +1,16 @@
 # 🤖 The AOSP Project — AOSP Mastery
 
+[![CI](https://github.com/kumar-gouda/The-AOSP-Project/actions/workflows/ci.yml/badge.svg)](https://github.com/kumar-gouda/The-AOSP-Project/actions/workflows/ci.yml)
+[![GitHub Pages](https://img.shields.io/badge/Live%20Platform-GitHub%20Pages-2ea44f?style=flat-square&logo=github)](https://kumar-gouda.github.io/The-AOSP-Project/)
 [![AOSP Target](https://img.shields.io/badge/AOSP%20Target-Android%2017%20%2F%20API%2037-3DDC84?style=flat-square&logo=android)](https://source.android.com)
 [![Kernel Baseline](https://img.shields.io/badge/Kernel-ACK%206.18%20GKI-blue?style=flat-square&logo=linux)](https://source.android.com/docs/core/architecture/kernel)
 [![Node.js Version](https://img.shields.io/badge/Node.js-%3E%3D20.0.0-green?style=flat-square&logo=node.js)](https://nodejs.org)
-[![Build Toolchain](https://img.shields.io/badge/Engine-Docusaurus%203.10%20%2B%20Rspack-orange?style=flat-square&logo=docusaurus)](https://docusaurus.io)
 [![License](https://img.shields.io/badge/License-Apache%202.0-lightgrey?style=flat-square)](LICENSE)
 
-> **A project-based curriculum and interactive learning platform: from C++17 and systems fundamentals to production-grade AOSP, Linux kernel, and real-device bring-up.**
+> **A project-based curriculum, interactive learning platform, and hands-on companion workspace: from C++17 and systems fundamentals to production-grade AOSP, Linux kernel, and real-device bring-up.**
+
+🌐 **Live Platform:** [https://kumar-gouda.github.io/The-AOSP-Project/](https://kumar-gouda.github.io/The-AOSP-Project/)  
+💻 **Companion Workspace:** [`spine-starter/`](./spine-starter/)
 
 ---
 
@@ -65,7 +69,46 @@ Instead of presenting an intimidating reference manual, the curriculum follows a
 
 ---
 
-## ⚡ Quickstart Guide
+## 💻 Companion Workspace (`spine-starter/`)
+
+Alongside the interactive curriculum site, this repository includes the complete engineering companion workspace in [`spine-starter/`](./spine-starter/):
+
+```
+spine-starter/
+├── 00-cpp17-lib/          <-- C++17 Circular RingBuffer (RAII, Move Semantics, GTest)
+├── 00-abi-probe/          <-- Systems-C ABI Prober (container_of, alignment, endianness)
+├── 00-cli/                <-- Basecamp Environment Verification Gate script
+├── 01-ipc/                <-- POSIX Shared Memory Producer & Consumer
+├── 02-instrumentation/    <-- Soong Android.bp with ASan/UBSan sanitizers
+├── 03-init-service/       <-- Android init .rc daemon configuration & signal handler
+├── 04-gki/                <-- Generic Kernel Image ABI verification & KMI checker
+├── 05-ndk-daemon/         <-- Native C++ (libbinder_ndk) & Rust daemons
+├── 06-aidl-hal/           <-- AIDL HAL service (ICustomDevice.aidl, BnCustomDevice)
+├── 07-systemservice/      <-- System Server service & permission enforcement
+├── 08-selinux/            <-- SELinux policy rules (.te) & file_contexts labels
+├── 09-seeded-bug/         <-- Reproducible Use-After-Free diagnostics sandbox
+├── 10-kmod/               <-- Out-of-tree Linux kernel module (miscdevice, spinlocks)
+├── 10.5-driver/           <-- Platform device driver with Device Tree & sysfs
+├── 11-image-analysis/     <-- Android image partition unpacking (lpunpack, avbtool)
+├── 12-pixel/              <-- Pixel board configuration & device makefiles
+├── 13-hardening/          <-- Compile hardening: Clang CFI, Fortify, Stack Protector
+├── 14-patch-series/       <-- Gerrit Change-Id commit hook & commit message guidelines
+├── 15-full/               <-- Full Vertical Slice Architecture checklist
+└── verify_all.sh          <-- Automated test & verification suite
+```
+
+### Running Workspace Verification:
+```bash
+# Verify directory structure and syntax in dry-run mode
+bash spine-starter/verify_all.sh --dry-run
+
+# Run verification on a specific phase
+bash spine-starter/verify_all.sh --phase 00-cpp17-lib
+```
+
+---
+
+## ⚡ Quickstart Guide for the Web Platform
 
 ### 1. Prerequisites
 - **Operating System:** Windows 10/11, macOS, or Linux.
@@ -79,7 +122,6 @@ cd The-AOSP-Project
 ```
 
 ### 3. Setup Dependencies
-Navigate into the site directory and install dependencies:
 ```bash
 cd aosp-mastery-site
 npm install
@@ -93,10 +135,7 @@ npm start
 The application will automatically open in your default browser at:  
 👉 **`http://localhost:3000`**
 
-*Hot reload is enabled by default: any edits made to documentation (`docs/`) or React components (`src/`) will update instantly in the browser.*
-
 ### 5. Build for Production
-To generate the optimized static build:
 ```bash
 npm run build
 ```
@@ -106,8 +145,7 @@ To preview the production build locally:
 npm run serve
 ```
 
-### 6. Verify Link Integrity
-To execute strict link validation across all pages and sidebars:
+### 6. Verify Strict Link Integrity
 ```powershell
 # Windows PowerShell:
 $env:STRICT_LINKS="true"; npm run build
@@ -118,57 +156,47 @@ STRICT_LINKS=1 npm run build
 
 ---
 
-## 📂 Project Structure
+## 🧩 Interactive Platform Features
 
-```
-The-AOSP-Project/
-├── README.md                           <-- Repository Overview & Quickstart Guide
-├── AOSP_Mastery_Platform_Plan_v4.md    <-- Complete Architectural Specification
-└── aosp-mastery-site/                  <-- Docusaurus Web Application
-    ├── docs/                           <-- 18 Comprehensive Learning Units (.mdx)
-    │   ├── intro.md                    <-- Getting Started Guide
-    │   ├── phase-minus-1-foundation.mdx<-- C++17 & Systems Foundations
-    │   ├── phase-0-basecamp.mdx        <-- Verification Gate & Cuttlefish
-    │   ├── ...                         <-- Phases 1 through 14
-    │   ├── phase-15-capstone.mdx       <-- Full-Stack Capstone
-    │   ├── glossary.mdx                <-- Searchable Glossary Page
-    │   └── changelog.mdx               <-- Platform Revision History
-    ├── data/
-    │   ├── competency-map.yaml         <-- Single Source of Truth for Skills & Tiers
-    │   └── load-competency-map.mjs     <-- Build-time YAML Schema Validator
-    ├── src/
-    │   ├── components/
-    │   │   ├── Unit/                   <-- KeywordSpotlight, DeepDive, ConceptComparison, etc.
-    │   │   ├── PhaseHeader/            <-- Tier, Time Estimate, Difficulty Badge
-    │   │   ├── Progress/               <-- LocalStorage Progress Engine & JSON Export/Import
-    │   │   ├── Roadmap/                <-- Interactive Visual Learning Map
-    │   │   ├── Glossary/               <-- Searchable Category-Filtered Dictionary
-    │   │   ├── CompetencyMap/          <-- YAML-driven Competency Grid
-    │   │   ├── TestRunner/             <-- Runnable Shell Command Tabs with Copy Button
-    │   │   └── NavbarProgress/         <-- Live Progress Bar in Top Navigation
-    │   ├── pages/
-    │   │   ├── index.js                <-- Hero Landing Page & Live Progress Panel
-    │   │   ├── roadmap.js              <-- Visual Roadmap Route (/roadmap)
-    │   │   └── competency-map.js       <-- Competency Map Route (/competency-map)
-    │   └── css/
-    │       └── custom.css              <-- Global Styles & WCAG AA Dark Mode Colors
-    ├── docusaurus.config.js            <-- Site Config & Faster Rspack Bundler
-    └── sidebars.js                     <-- Structured Curriculum Navigation
-```
+- **⚡ Flashcards & Active Recall Mode:** In the [Glossary](https://kumar-gouda.github.io/The-AOSP-Project/docs/glossary), toggle between the traditional dictionary list and interactive 3D flipping flashcards with self-assessment tracking and keyboard shortcuts (`Space` to flip, `Arrow` keys to navigate).
+- **🖥️ In-Browser ADB Terminal Sandbox:** Visit the [Terminal Sandbox](https://kumar-gouda.github.io/The-AOSP-Project/terminal) to practice running real `adb` and `fastboot` commands against a simulated Android 15 / Linux 6.1 GKI device (querying `getprop`, testing `service list`, inspecting `lshal`, toggling SELinux modes, and reading kernel module nodes).
+- **📊 Real-Time Competency Map & Local Storage:** Track completed phases, earned XP, and milestone deliverables across Recruit, Builder, Engineer, Architect, and Master tiers. Back up your progress anytime with one-click JSON export/import.
+- **🛠️ Pedagogical Learning Units:** Every phase contains structured pedagogical sections: `<KeywordSpotlight>`, `<DeepDive>`, `<ConceptComparison>`, `<CodeAnnotator>`, `<BreakIt>`, `<Checkpoint>`, and `<Troubleshooting>`.
 
 ---
 
-## 🧩 Pedagogical Components
+## 📂 Repository File Tree
 
-Every learning phase in this curriculum uses specialized, accessible React components:
-
-- **`<KeywordSpotlight>`**: Cards providing pronunciation, plain-English analogies, and AOSP-specific context for new keywords and acronyms.
-- **`<DeepDive>`**: Accessible collapsible sections explaining under-the-hood technical mechanics (memory layouts, registers, kernel routines).
-- **`<ConceptComparison>`**: Side-by-side comparison tables disambiguating commonly confused concepts (e.g. Stack vs Heap, Bionic vs glibc, HIDL vs AIDL).
-- **`<CodeAnnotator>`**: Line-by-line syntax dissection for compiler attributes, macros, and configuration flags.
-- **`<BreakIt>`**: Practical failure drills showing real symptoms, root causes, and fixes.
-- **`<Checkpoint>`**: Instant-feedback conceptual quizzes with detailed explanations.
-- **`<Troubleshooting>`**: Diagnostic matrices for resolving common build and runtime errors.
+```
+The-AOSP-Project/
+├── .github/
+│   └── workflows/
+│       ├── ci.yml                      <-- Strict build & competency map CI
+│       └── deploy.yml                  <-- Automated GitHub Pages deployment
+├── spine-starter/                      <-- Hands-on C++/C/Rust/Java/Kernel exercises
+│   ├── verify_all.sh                   <-- Multi-phase automated verification script
+│   └── 00-* through 15-*               <-- Phase-specific starter workspaces
+├── aosp-mastery-site/                  <-- Docusaurus Web Application
+│   ├── docs/                           <-- 18 Comprehensive Learning Units (.mdx)
+│   ├── data/
+│   │   ├── competency-map.yaml         <-- Single Source of Truth for Skills & Tiers
+│   │   └── load-competency-map.mjs     <-- Build-time YAML Schema Validator
+│   ├── src/
+│   │   ├── components/
+│   │   │   ├── Glossary/               <-- Searchable Dictionary + Flashcard Mode
+│   │   │   ├── TerminalSandbox/        <-- Mock ADB / Fastboot Web Terminal
+│   │   │   ├── Unit/                   <-- Pedagogical UI components
+│   │   │   ├── Roadmap/                <-- Visual Learning Roadmap
+│   │   │   └── Progress/               <-- LocalStorage Progress Engine
+│   │   └── pages/
+│   │       ├── index.js                <-- Hero Landing Page
+│   │       ├── roadmap.js              <-- Visual Roadmap Route (/roadmap)
+│   │       ├── competency-map.js       <-- Competency Map Route (/competency-map)
+│   │       └── terminal.js             <-- Interactive Terminal Route (/terminal)
+│   └── docusaurus.config.js            <-- Docusaurus Config with dynamic baseUrl
+├── LICENSE                             <-- Apache 2.0 Open Source License
+└── README.md                           <-- Master Documentation & Guide
+```
 
 ---
 
@@ -182,5 +210,5 @@ Every learning phase in this curriculum uses specialized, accessible React compo
 
 ## 📜 License
 
-This project is licensed under the **Apache License 2.0**. See the [LICENSE](LICENSE) file for details.
+This project is licensed under the **Apache License 2.0**. See the [LICENSE](LICENSE) file for details.  
 All content and commands are verified against official Android Open Source Project documentation at [source.android.com](https://source.android.com).

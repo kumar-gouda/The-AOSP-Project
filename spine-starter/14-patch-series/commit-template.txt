@@ -1,0 +1,9 @@
+# <Subsystem>: Short summary of change under 65 chars (imperative mood)
+#
+# Detailed paragraph explaining the problem, the context, and the fix.
+# Why was this approach chosen over alternatives?
+# Any performance or ABI implications?
+#
+# Bug: 123456789
+# Test: atest CtsCustomDeviceTestCases
+# Change-Id: I0000000000000000000000000000000000000000

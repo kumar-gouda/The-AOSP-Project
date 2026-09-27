@@ -1,0 +1,45 @@
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
+aidl_interface {
+    name: "android.hardware.custom",
+    vendor_available: true,
+    srcs: ["aidl/android/hardware/custom/*.aidl"],
+    stability: "vintf",
+    backend: {
+        cpp: {
+            enabled: false,
+        },
+        java: {
+            enabled: true,
+        },
+        ndk: {
+            enabled: true,
+        },
+    },
+    versions_with_info: [
+        {
+            version: "1",
+            imports: [],
+        },
+    ],
+}
+
+cc_binary {
+    name: "android.hardware.custom-service",
+    relative_install_path: "hw",
+    init_rc: ["android.hardware.custom-service.rc"],
+    vintf_fragments: ["android.hardware.custom-service.xml"],
+    vendor: true,
+    srcs: [
+        "src/CustomDevice.cpp",
+        "src/main.cpp",
+    ],
+    shared_libs: [
+        "libbase",
+        "liblog",
+        "libbinder_ndk",
+        "android.hardware.custom-V1-ndk",
+    ],
+}

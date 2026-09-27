@@ -10,4 +10,22 @@ Desktop.ini
 *.swo
 *~
 
+# Python cache & compiled binaries
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Native build artifacts
+*.out
+*.o
+*.ko
+*.mod*
+*.order
+*.symvers
+*.d
+build/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+
 # The site-level gitignore handles node_modules, build, .docusaurus

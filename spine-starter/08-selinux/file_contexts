@@ -1,0 +1,3 @@
+# File context labels for custom system binaries
+/system/bin/my_daemon                   u:object_r:my_daemon_exec:s0
+/vendor/bin/hw/android\.hardware\.custom-service u:object_r:hal_custom_default_exec:s0

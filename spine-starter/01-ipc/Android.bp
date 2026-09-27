@@ -1,0 +1,33 @@
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
+cc_binary {
+    name: "shm_producer",
+    srcs: ["shm_producer.c"],
+    cflags: [
+        "-Wall",
+        "-Werror",
+        "-Wextra",
+        "-D_GNU_SOURCE",
+    ],
+    shared_libs: [
+        "liblog",
+    ],
+    vendor_available: true,
+}
+
+cc_binary {
+    name: "shm_consumer",
+    srcs: ["shm_consumer.c"],
+    cflags: [
+        "-Wall",
+        "-Werror",
+        "-Wextra",
+        "-D_GNU_SOURCE",
+    ],
+    shared_libs: [
+        "liblog",
+    ],
+    vendor_available: true,
+}

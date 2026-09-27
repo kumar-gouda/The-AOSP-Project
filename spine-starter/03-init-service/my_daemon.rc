@@ -1,0 +1,16 @@
+# Android Init RC configuration for custom background daemon
+service my_daemon /system/bin/my_daemon
+    class core
+    user system
+    group system
+    capabilities NET_ADMIN SYS_NICE
+    oneshot
+    disabled
+
+# Trigger on boot completed property
+on property:sys.boot_completed=1
+    start my_daemon
+
+on property:dev.my_daemon.restart=1
+    restart my_daemon
+    setprop dev.my_daemon.restart 0

@@ -1,32 +1,19 @@
 # Deploy the AOSP Mastery site to GitHub Pages.
-#
-# Action versions verified against the official GitHub Pages starter workflow
-# and the Node.js starter workflow (actions/starter-workflows):
-#   checkout@v4, setup-node@v4, configure-pages@v5,
-#   upload-pages-artifact@v3, deploy-pages@v5
-#
-# NOTE: this site lives in the `aosp-mastery-site/` subfolder of the repo,
-# so `working-directory` and the uploaded artifact `path` point there.
-
 name: Deploy site to GitHub Pages
 
 on:
-  # Runs on pushes to the default branch
   push:
-    branches: [main]
+    branches: [master, main]
     paths:
       - 'aosp-mastery-site/**'
       - '.github/workflows/deploy.yml'
-  # Allows manual runs from the Actions tab
   workflow_dispatch:
 
-# Permissions required for GitHub Pages deployment
 permissions:
   contents: read
   pages: write
   id-token: write
 
-# Allow only one concurrent deployment; do not cancel in-progress runs
 concurrency:
   group: pages
   cancel-in-progress: false
@@ -52,6 +39,8 @@ jobs:
         run: npm ci
 
       - name: Build site
+        env:
+          STRICT_LINKS: '1'
         run: npm run build
 
       - name: Setup Pages

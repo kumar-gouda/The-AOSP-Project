@@ -1,0 +1,27 @@
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
+cc_binary {
+    name: "instrumentation_sample",
+    srcs: ["src/main.cpp"],
+    cflags: [
+        "-Wall",
+        "-Werror",
+        "-Wextra",
+        "-O2",
+    ],
+    sanitize: {
+        address: true,
+        integer_overflow: true,
+        undefined: true,
+        diag: {
+            undefined: true,
+        },
+    },
+    shared_libs: [
+        "libbase",
+        "liblog",
+    ],
+    vendor_available: true,
+}

@@ -13,6 +13,11 @@ import {loadCompetencyMap} from './data/load-competency-map.mjs';
 // read and validated at build time here, then exposed to pages via customFields.
 const competencyMap = loadCompetencyMap();
 
+// Determine if building in GitHub Actions CI/Pages environment
+const isCI = process.env.GITHUB_ACTIONS === 'true';
+const url = isCI ? 'https://kumar-gouda.github.io' : 'http://localhost:3000';
+const baseUrl = isCI ? '/The-AOSP-Project/' : '/';
+
 // Locally, a broken link is a warning (fast iteration). In CI, set
 // STRICT_LINKS=1 to turn it into a hard failure so dangling links cannot ship.
 // See .github/workflows/ci.yml.
@@ -34,15 +39,13 @@ const config = {
     faster: true,
   },
 
-  // Local-first: works on localhost:3000 out of the box. Set to your
-  // GitHub Pages URL before deploying.
-  url: 'http://localhost:3000',
-  // For GitHub Pages project sites this is often '/<projectName>/'.
-  baseUrl: '/',
+  url,
+  baseUrl,
+  trailingSlash: false,
 
-  // GitHub pages deployment config (fill in before `npm run deploy`).
-  organizationName: 'aosp-mastery',
-  projectName: 'aosp-mastery',
+  // GitHub pages deployment config
+  organizationName: 'kumar-gouda',
+  projectName: 'The-AOSP-Project',
   onBrokenLinks,
 
   // Even if you don't use internationalization, you can use this field to set
@@ -59,8 +62,8 @@ const config = {
       ({
         docs: {
           sidebarPath: './sidebars.js',
-          // Remove this to remove the "edit this page" links, or point it at your repo.
-          editUrl: 'https://github.com/aosp-mastery/aosp-mastery/tree/main/',
+          // Edit URL pointing to the repository
+          editUrl: 'https://github.com/kumar-gouda/The-AOSP-Project/tree/master/aosp-mastery-site/',
         },
         blog: false,
         theme: {
@@ -128,7 +131,17 @@ const config = {
             position: 'left',
           },
           {
+            to: '/terminal',
+            label: 'Terminal Sandbox',
+            position: 'left',
+          },
+          {
             type: 'custom-progress',
+            position: 'right',
+          },
+          {
+            href: 'https://github.com/kumar-gouda/The-AOSP-Project',
+            label: 'GitHub',
             position: 'right',
           },
           {
@@ -171,8 +184,8 @@ const config = {
             title: 'More',
             items: [
               {
-                label: 'GitHub',
-                href: 'https://github.com/aosp-mastery/aosp-mastery',
+                label: 'GitHub Repository',
+                href: 'https://github.com/kumar-gouda/The-AOSP-Project',
               },
             ],
           },

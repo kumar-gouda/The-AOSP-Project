@@ -1,13 +1,13 @@
-import React, {useMemo, useState} from 'react';
+import React, {useMemo, useState, useEffect, useCallback} from 'react';
 import clsx from 'clsx';
 import styles from './styles.module.css';
 
 /**
- * Searchable AOSP/Android/kernel glossary.
+ * Searchable AOSP/Android/kernel glossary with interactive Flashcard / Active Recall mode.
  *
  * Every definition here is sourced from the curriculum content or
  * source.android.com. Terms are grouped by category and filterable
- * via a live search input.
+ * via a live search input or practiced via active recall flashcards.
  */
 
 const GLOSSARY = [
@@ -94,17 +94,34 @@ const GLOSSARY = [
   {term: 'cs.android.com', full: 'Android Code Search', category: 'Reference', def: "Google's Kythe-powered semantic code search platform indexing the complete AOSP source tree with cross-reference navigation."},
 ];
 
-// Sort alphabetically by term
-GLOSSARY.sort((a, b) => a.term.localeCompare(b.term));
-
+// Sort alphabetically by default
+const DEFAULT_SORTED = [...GLOSSARY].sort((a, b) => a.term.localeCompare(b.term));
 const CATEGORIES = [...new Set(GLOSSARY.map((g) => g.category))].sort();
 
 export default function Glossary() {
+  const [mode, setMode] = useState('list'); // 'list' or 'flashcard'
   const [filter, setFilter] = useState('');
   const [category, setCategory] = useState('all');
 
-  const filtered = useMemo(() => {
-    let list = GLOSSARY;
+  // Flashcard specific state
+  const [cardIndex, setCardIndex] = useState(0);
+  const [isFlipped, setIsFlipped] = useState(false);
+  const [deck, setDeck] = useState(DEFAULT_SORTED);
+  const [mastered, setMastered] = useState({});
+
+  // Reset flashcard state when category changes
+  useEffect(() => {
+    let list = DEFAULT_SORTED;
+    if (category !== 'all') {
+      list = list.filter((g) => g.category === category);
+    }
+    setDeck(list);
+    setCardIndex(0);
+    setIsFlipped(false);
+  }, [category]);
+
+  const filteredList = useMemo(() => {
+    let list = DEFAULT_SORTED;
     if (category !== 'all') {
       list = list.filter((g) => g.category === category);
     }
@@ -120,17 +137,80 @@ export default function Glossary() {
     return list;
   }, [filter, category]);
 
+  const currentCard = deck[cardIndex] || null;
+
+  const handleShuffle = useCallback(() => {
+    const shuffled = [...deck].sort(() => Math.random() - 0.5);
+    setDeck(shuffled);
+    setCardIndex(0);
+    setIsFlipped(false);
+  }, [deck]);
+
+  const handleNextCard = useCallback(() => {
+    setIsFlipped(false);
+    setCardIndex((prev) => (prev + 1) % deck.length);
+  }, [deck.length]);
+
+  const handlePrevCard = useCallback(() => {
+    setIsFlipped(false);
+    setCardIndex((prev) => (prev - 1 + deck.length) % deck.length);
+  }, [deck.length]);
+
+  const handleMarkMastered = useCallback((term, status) => {
+    setMastered((prev) => ({...prev, [term]: status}));
+    handleNextCard();
+  }, [handleNextCard]);
+
+  // Keyboard navigation for flashcard mode
+  useEffect(() => {
+    if (mode !== 'flashcard') return;
+
+    const handleKeyDown = (e) => {
+      if (e.target.tagName === 'INPUT') return;
+      if (e.code === 'Space') {
+        e.preventDefault();
+        setIsFlipped((f) => !f);
+      } else if (e.code === 'ArrowRight') {
+        e.preventDefault();
+        handleNextCard();
+      } else if (e.code === 'ArrowLeft') {
+        e.preventDefault();
+        handlePrevCard();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [mode, handleNextCard, handlePrevCard]);
+
+  const masteredCount = Object.values(mastered).filter((v) => v === 'known').length;
+
   return (
     <div className={styles.glossary}>
+      {/* Mode Switcher */}
+      <div className={styles.modeTabs}>
+        <button
+          type="button"
+          className={clsx(
+            styles.modeButton,
+            mode === 'list' && styles.modeButtonActive,
+          )}
+          onClick={() => setMode('list')}>
+          📚 Browse Glossary
+        </button>
+        <button
+          type="button"
+          className={clsx(
+            styles.modeButton,
+            mode === 'flashcard' && styles.modeButtonActive,
+          )}
+          onClick={() => setMode('flashcard')}>
+          ⚡ Flashcards & Active Recall
+        </button>
+      </div>
+
+      {/* Category filter bar */}
       <div className={styles.controls}>
-        <input
-          type="text"
-          placeholder="Search terms..."
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          className={styles.search}
-          aria-label="Search glossary terms"
-        />
         <div className={styles.filters}>
           <button
             type="button"
@@ -139,39 +219,160 @@ export default function Glossary() {
               category === 'all' ? 'button--primary' : 'button--secondary',
             )}
             onClick={() => setCategory('all')}>
-            All
+            All ({GLOSSARY.length})
           </button>
-          {CATEGORIES.map((cat) => (
-            <button
-              key={cat}
-              type="button"
-              className={clsx(
-                'button button--sm',
-                category === cat ? 'button--primary' : 'button--secondary',
-              )}
-              onClick={() => setCategory(cat)}>
-              {cat}
-            </button>
-          ))}
+          {CATEGORIES.map((cat) => {
+            const count = GLOSSARY.filter((g) => g.category === cat).length;
+            return (
+              <button
+                key={cat}
+                type="button"
+                className={clsx(
+                  'button button--sm',
+                  category === cat ? 'button--primary' : 'button--secondary',
+                )}
+                onClick={() => setCategory(cat)}>
+                {cat} ({count})
+              </button>
+            );
+          })}
         </div>
       </div>
-      <p className={styles.count}>
-        Showing <strong>{filtered.length}</strong> of {GLOSSARY.length} terms
-      </p>
-      <dl className={styles.list}>
-        {filtered.map((g) => (
-          <div key={g.term} className={styles.entry}>
-            <dt className={styles.term}>
-              <code>{g.term}</code>
-              <span className={styles.full}>{g.full}</span>
-              <span className={styles.category}>{g.category}</span>
-            </dt>
-            <dd className={styles.def}>{g.def}</dd>
+
+      {mode === 'list' ? (
+        <>
+          <div className={styles.searchRow}>
+            <input
+              type="text"
+              placeholder="Search terms, acronyms, or descriptions..."
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              className={styles.search}
+              aria-label="Search glossary terms"
+            />
+            <p className={styles.count}>
+              Showing <strong>{filteredList.length}</strong> of {GLOSSARY.length} terms
+            </p>
           </div>
-        ))}
-      </dl>
-      {filtered.length === 0 && (
-        <p className={styles.empty}>No terms match your search.</p>
+
+          <dl className={styles.list}>
+            {filteredList.map((g) => (
+              <div key={g.term} className={styles.entry}>
+                <dt className={styles.term}>
+                  <code>{g.term}</code>
+                  <span className={styles.full}>{g.full}</span>
+                  <span className={styles.category}>{g.category}</span>
+                </dt>
+                <dd className={styles.def}>{g.def}</dd>
+              </div>
+            ))}
+          </dl>
+          {filteredList.length === 0 && (
+            <p className={styles.empty}>No terms match your search filter.</p>
+          )}
+        </>
+      ) : (
+        <div className={styles.flashcardSection}>
+          <div className={styles.flashcardHeader}>
+            <span className={styles.deckStats}>
+              Card <strong>{cardIndex + 1}</strong> of <strong>{deck.length}</strong>
+              {' '}&bull; Mastered: <strong>{masteredCount}</strong>
+            </span>
+            <div className={styles.deckActions}>
+              <button
+                type="button"
+                className="button button--sm button--secondary"
+                onClick={handleShuffle}>
+                🔀 Shuffle
+              </button>
+              <button
+                type="button"
+                className="button button--sm button--secondary"
+                onClick={() => {
+                  setMastered({});
+                  setCardIndex(0);
+                  setIsFlipped(false);
+                }}>
+                ↺ Reset Progress
+              </button>
+            </div>
+          </div>
+
+          {currentCard ? (
+            <div
+              className={clsx(styles.cardContainer, isFlipped && styles.cardFlipped)}
+              onClick={() => setIsFlipped((f) => !f)}
+              role="button"
+              tabIndex={0}
+              onKeyPress={(e) => {
+                if (e.key === 'Enter') setIsFlipped((f) => !f);
+              }}>
+              <div className={styles.cardInner}>
+                {/* Front of card */}
+                <div className={styles.cardFront}>
+                  <div className={styles.cardBadge}>{currentCard.category}</div>
+                  <div className={styles.cardTerm}>{currentCard.term}</div>
+                  <div className={styles.cardHint}>Tap card or press [Space] to reveal answer</div>
+                </div>
+
+                {/* Back of card */}
+                <div className={styles.cardBack}>
+                  <div className={styles.cardBadge}>{currentCard.category}</div>
+                  <div className={styles.cardTermSmall}>{currentCard.term}</div>
+                  <div className={styles.cardFullName}>{currentCard.full}</div>
+                  <div className={styles.cardDefinition}>{currentCard.def}</div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <p className={styles.empty}>No cards in this category.</p>
+          )}
+
+          {/* Flashcard Controls */}
+          {currentCard && (
+            <div className={styles.cardControls}>
+              <button
+                type="button"
+                className="button button--secondary"
+                onClick={handlePrevCard}
+                disabled={deck.length <= 1}>
+                &larr; Prev
+              </button>
+              <button
+                type="button"
+                className={clsx('button', isFlipped ? 'button--warning' : 'button--primary')}
+                onClick={() => setIsFlipped((f) => !f)}>
+                {isFlipped ? 'Hide Answer' : 'Reveal Answer'}
+              </button>
+              {isFlipped && (
+                <>
+                  <button
+                    type="button"
+                    className="button button--danger"
+                    onClick={() => handleMarkMastered(currentCard.term, 'review')}>
+                    Need Review
+                  </button>
+                  <button
+                    type="button"
+                    className="button button--success"
+                    onClick={() => handleMarkMastered(currentCard.term, 'known')}>
+                    ✓ I Know This!
+                  </button>
+                </>
+              )}
+              <button
+                type="button"
+                className="button button--secondary"
+                onClick={handleNextCard}
+                disabled={deck.length <= 1}>
+                Next &rarr;
+              </button>
+            </div>
+          )}
+          <p className={styles.hotkeyHint}>
+            Keyboard Shortcuts: <code>Space</code> to flip, <code>&larr;</code> / <code>&rarr;</code> for prev/next card.
+          </p>
+        </div>
       )}
     </div>
   );

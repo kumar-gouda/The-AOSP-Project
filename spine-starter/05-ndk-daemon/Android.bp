@@ -1,0 +1,25 @@
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
+cc_binary {
+    name: "native_cpp_daemon",
+    srcs: ["cpp_daemon/main.cpp"],
+    shared_libs: [
+        "libbase",
+        "liblog",
+        "libbinder_ndk",
+    ],
+    vendor_available: true,
+}
+
+rust_binary {
+    name: "native_rust_daemon",
+    crate_name: "native_rust_daemon",
+    srcs: ["rust_daemon/src/main.rs"],
+    rustlibs: [
+        "liblog_rust",
+        "liblogger",
+    ],
+    vendor_available: true,
+}
