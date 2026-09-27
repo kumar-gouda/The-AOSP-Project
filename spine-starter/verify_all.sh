@@ -136,11 +136,12 @@ if [[ $DRY_RUN -eq 0 ]]; then
     # Check 00-abi-probe
     if [[ -z "$PHASE_FILTER" || "$PHASE_FILTER" == *"00-abi-probe"* ]]; then
       log_info "Compiling 00-abi-probe/abi_probe.c..."
-      if $CC -Wall -Wextra -std=c11 "$SCRIPT_DIR/00-abi-probe/abi_probe.c" -o "$SCRIPT_DIR/00-abi-probe/abi_probe.out" 2>/dev/null; then
+      COMPILE_ERR=$($CC -Wall -Wextra -std=gnu11 "$SCRIPT_DIR/00-abi-probe/abi_probe.c" -o "$SCRIPT_DIR/00-abi-probe/abi_probe.out" 2>&1)
+      if [[ $? -eq 0 ]]; then
         log_pass "00-abi-probe compiled cleanly"
         rm -f "$SCRIPT_DIR/00-abi-probe/abi_probe.out"
       else
-        log_fail "00-abi-probe" "Compilation error"
+        log_fail "00-abi-probe" "Compilation error: $COMPILE_ERR"
       fi
     fi
   else

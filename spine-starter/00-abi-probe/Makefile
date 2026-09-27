@@ -1,5 +1,5 @@
 CC ?= gcc
-CFLAGS ?= -Wall -Wextra -std=c11 -O2
+CFLAGS ?= -Wall -Wextra -std=gnu11 -O2
 
 all: abi_probe
 
