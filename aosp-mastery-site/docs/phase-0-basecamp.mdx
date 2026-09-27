@@ -201,6 +201,14 @@ git version 2.34.1
 (Verify repo launcher version is >= 2.4)`}
 />
 
+:::tip Automated Verification Script & Web Sandbox
+- **Companion Script:** You can run the automated environment gate directly from the companion workspace:
+  ```bash
+  bash spine-starter/00-cli/verify_env.sh
+  ```
+- **In-Browser Practice:** Don't have a live Android device yet? Practice `adb devices`, `adb root`, and `adb shell getprop` in the **[Interactive ADB Terminal Sandbox](/terminal)**.
+:::
+
 ### Cuttlefish Host Packages & KVM Permissions
 
 Install the host packages required to run Cuttlefish:

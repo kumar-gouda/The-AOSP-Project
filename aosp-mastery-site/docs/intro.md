@@ -47,7 +47,9 @@ Every external fact in this course is either verified against
 
 - **[Visual Roadmap](/roadmap)**: See all 18 phases, track progress milestones, and inspect XP tiers at a glance.
 - **[Competency Map](/competency-map)**: The single source of truth for all 22 competencies and verified evidence criteria.
-- **[AOSP Glossary](./glossary)**: Instant lookup for 50+ Android, kernel, and build system acronyms.
+- **[Interactive ADB Terminal Sandbox](/terminal)**: Practice running real `adb` and `fastboot` commands against a simulated Android 15 / Linux 6.1 GKI device directly in your browser.
+- **[AOSP Glossary & Flashcards](./glossary)**: Instant lookup for 50+ Android, kernel, and build system acronyms with interactive 3D active-recall flashcard mode.
+- **Companion Workspace (`spine-starter/`)**: Pre-structured coding exercises with CMake, Android.bp, and Makefiles for all 18 phases located in the repository root.
 - **[Changelog](./changelog)**: Documentation and verification updates pinned to Android 17 / ACK 6.18.
 
 ## Where to go next
